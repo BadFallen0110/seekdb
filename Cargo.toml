@@ -1,0 +1,20 @@
+[package]
+name = "minivectordb"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[lib]
+name = "minivectordb"
+path = "src/lib.rs"
+
+[[bin]]
+name = "minivectordb"
+path = "src/main.rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+

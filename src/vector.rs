@@ -86,22 +86,50 @@ unsafe fn l2_squared_avx2(left: &[f32], right: &[f32]) -> f64 {
         _mm256_sub_ps,
     };
 
-    let mut accumulator = _mm256_setzero_ps();
+    let mut accumulator0 = _mm256_setzero_ps();
+    let mut accumulator1 = _mm256_setzero_ps();
+    let mut accumulator2 = _mm256_setzero_ps();
+    let mut accumulator3 = _mm256_setzero_ps();
     let mut position = 0;
+    while position + 32 <= left.len() {
+        for (offset, accumulator) in [
+            (0, &mut accumulator0),
+            (8, &mut accumulator1),
+            (16, &mut accumulator2),
+            (24, &mut accumulator3),
+        ] {
+            // SAFETY: position + offset has eight readable f32 elements in
+            // both slices, and loadu accepts unaligned pointers.
+            let left_chunk = unsafe { _mm256_loadu_ps(left.as_ptr().add(position + offset)) };
+            let right_chunk = unsafe { _mm256_loadu_ps(right.as_ptr().add(position + offset)) };
+            let difference = _mm256_sub_ps(left_chunk, right_chunk);
+            *accumulator = _mm256_add_ps(*accumulator, _mm256_mul_ps(difference, difference));
+        }
+        position += 32;
+    }
     while position + 8 <= left.len() {
         // SAFETY: position has at least eight readable f32 elements in both
         // slices, and loadu accepts unaligned pointers.
         let left_chunk = unsafe { _mm256_loadu_ps(left.as_ptr().add(position)) };
         let right_chunk = unsafe { _mm256_loadu_ps(right.as_ptr().add(position)) };
         let difference = _mm256_sub_ps(left_chunk, right_chunk);
-        accumulator = _mm256_add_ps(accumulator, _mm256_mul_ps(difference, difference));
+        accumulator0 = _mm256_add_ps(accumulator0, _mm256_mul_ps(difference, difference));
         position += 8;
     }
 
-    let mut lanes = [0.0_f32; 8];
-    // SAFETY: lanes has room for exactly one eight-float AVX register.
-    unsafe { _mm256_storeu_ps(lanes.as_mut_ptr(), accumulator) };
-    let mut sum = lanes.iter().map(|value| f64::from(*value)).sum::<f64>();
+    let mut lanes = [[0.0_f32; 8]; 4];
+    // SAFETY: every lane array has room for one eight-float AVX register.
+    unsafe {
+        _mm256_storeu_ps(lanes[0].as_mut_ptr(), accumulator0);
+        _mm256_storeu_ps(lanes[1].as_mut_ptr(), accumulator1);
+        _mm256_storeu_ps(lanes[2].as_mut_ptr(), accumulator2);
+        _mm256_storeu_ps(lanes[3].as_mut_ptr(), accumulator3);
+    }
+    let mut sum = lanes
+        .iter()
+        .flatten()
+        .map(|value| f64::from(*value))
+        .sum::<f64>();
     while position < left.len() {
         let difference = f64::from(left[position]) - f64::from(right[position]);
         sum += difference * difference;

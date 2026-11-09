@@ -10,6 +10,7 @@ use crate::storage;
 use crate::table::{Table, TableSchema};
 use crate::value::{ColumnType, Row, Value};
 use crate::vector::parse_vector;
+use crate::vector_store::VectorStore;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct QueryResult {
@@ -18,13 +19,13 @@ pub struct QueryResult {
     pub affected: usize,
 }
 
-#[derive(Clone, Debug)]
 pub struct Database {
     pub(crate) tables: BTreeMap<String, Table>,
     query_mode: QueryMode,
     transaction_backup: Option<BTreeMap<String, Table>>,
     data_directory: Option<PathBuf>,
     pending_mutations: Vec<storage::Mutation>,
+    vectors: VectorStore,
 }
 
 impl Database {
@@ -35,20 +36,45 @@ impl Database {
             transaction_backup: None,
             data_directory: None,
             pending_mutations: Vec::new(),
+            vectors: VectorStore::memory(),
         }
     }
 
     pub fn open(data_directory: impl AsRef<Path>) -> Result<Self, DbError> {
+        let cache_limit = std::env::var("MINIVECTORDDB_CACHE_BYTES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(64 * 1024 * 1024);
+        Self::open_with_cache_limit(data_directory, cache_limit)
+    }
+
+    pub fn open_with_cache_limit(
+        data_directory: impl AsRef<Path>,
+        cache_limit: usize,
+    ) -> Result<Self, DbError> {
         let data_directory = data_directory.as_ref().to_path_buf();
         storage::ensure_data_directory(&data_directory)?;
         let wal_path = data_directory.join("state.log");
-        let tables = storage::load_database(&wal_path)?;
+        let vector_path = data_directory.join("vectors.bin");
+        let rebuild_path = data_directory.join("vectors.bin.tmp");
+        if rebuild_path.exists() {
+            std::fs::remove_file(&rebuild_path)?;
+        }
+        let mut rebuilding_vectors = VectorStore::open(&rebuild_path, cache_limit)?;
+        let tables = storage::load_database(&wal_path, &mut rebuilding_vectors)?;
+        drop(rebuilding_vectors);
+        if vector_path.exists() {
+            std::fs::remove_file(&vector_path)?;
+        }
+        std::fs::rename(&rebuild_path, &vector_path)?;
+        let vectors = VectorStore::open(&vector_path, cache_limit)?;
         Ok(Self {
             tables,
             query_mode: QueryMode::Exact,
             transaction_backup: None,
             data_directory: Some(data_directory),
             pending_mutations: Vec::new(),
+            vectors,
         })
     }
 
@@ -58,6 +84,10 @@ impl Database {
 
     pub fn set_query_mode(&mut self, mode: QueryMode) {
         self.query_mode = mode;
+    }
+
+    pub fn vector_cache_bytes(&self) -> usize {
+        self.vectors.cache_bytes()
     }
 
     pub fn execute(&mut self, source: &str) -> Result<QueryResult, DbError> {
@@ -177,13 +207,13 @@ impl Database {
         columns: Option<Vec<String>>,
         rows: Vec<Vec<Literal>>,
     ) -> Result<QueryResult, DbError> {
-        let table = self.table_mut(table_name)?;
+        let schema = self.table(table_name)?.schema.clone();
         let prepared = if let Some(columns) = columns {
             let indexes = columns
                 .iter()
-                .map(|column| table.schema.column_index(column))
+                .map(|column| schema.column_index(column))
                 .collect::<Result<Vec<_>, _>>()?;
-            if indexes.len() != table.schema.columns.len() {
+            if indexes.len() != schema.columns.len() {
                 return Err(DbError::new(
                     ErrorCategory::TypeMismatch,
                     "explicit INSERT column lists must include every column",
@@ -199,9 +229,9 @@ impl Database {
                     }
                     let mut decoded = Vec::with_capacity(row.len());
                     for (value, index) in row.into_iter().zip(&indexes) {
-                        decoded.push(table.schema.decode_literal(*index, value)?);
+                        decoded.push(schema.decode_literal(*index, value)?);
                     }
-                    let mut ordered = vec![Value::BigInt(0); table.schema.columns.len()];
+                    let mut ordered = vec![Value::BigInt(0); schema.columns.len()];
                     for (value, index) in decoded.into_iter().zip(indexes.iter().copied()) {
                         ordered[index] = value;
                     }
@@ -210,13 +240,25 @@ impl Database {
                 .collect::<Result<Vec<_>, _>>()?
         } else {
             rows.into_iter()
-                .map(|row| table.schema.decode_row(row))
+                .map(|row| schema.decode_row(row))
                 .collect::<Result<Vec<_>, _>>()?
         };
+        let mut prepared = prepared;
         let mutation_rows = prepared
             .iter()
-            .map(|row| (table.primary_key(row), row.clone()))
+            .map(|row| {
+                (
+                    row[schema.primary_key_index]
+                        .as_bigint()
+                        .expect("validated primary key"),
+                    row.clone(),
+                )
+            })
             .collect::<Vec<_>>();
+        for row in &mut prepared {
+            self.materialize_row_for_storage(row)?;
+        }
+        let table = self.table_mut(table_name)?;
         let affected = table.insert_prepared(prepared)?;
         self.pending_mutations.push(storage::Mutation::Upsert {
             table: table_name.to_owned(),
@@ -234,41 +276,50 @@ impl Database {
         assignments: Vec<(String, Literal)>,
         filter: Option<Expression>,
     ) -> Result<QueryResult, DbError> {
-        let table = self.table_mut(table_name)?;
+        let schema = self.table(table_name)?.schema.clone();
         let mut changes = Vec::new();
         for (column, literal) in assignments {
-            let index = table.schema.column_index(&column)?;
-            if index == table.schema.primary_key_index {
+            let index = schema.column_index(&column)?;
+            if index == schema.primary_key_index {
                 return Err(DbError::new(
                     ErrorCategory::Unsupported,
                     "primary key updates are not supported",
                 ));
             }
-            changes.push((index, table.schema.decode_literal(index, literal)?));
+            changes.push((index, schema.decode_literal(index, literal)?));
         }
 
         let mut keys = Vec::new();
-        for (key, row) in &table.rows {
-            if matches_filter(&table.schema, row, filter.as_ref())? {
-                keys.push(*key);
+        {
+            let table = self.table(table_name)?;
+            for (key, row) in &table.rows {
+                if matches_filter(&table.schema, row, filter.as_ref())? {
+                    keys.push(*key);
+                }
             }
         }
 
         let mut replacements = Vec::with_capacity(keys.len());
+        let mut persisted_replacements = Vec::with_capacity(keys.len());
         for key in &keys {
-            let mut row = table.rows[key].clone();
+            let mut row = self.table(table_name)?.rows[key].clone();
             for (index, value) in &changes {
                 row[*index] = value.clone();
             }
+            persisted_replacements.push((*key, self.hydrate_row(&row)?));
+            self.materialize_row_for_storage(&mut row)?;
             replacements.push((*key, row));
         }
-        for (key, row) in &replacements {
-            table.rows.insert(*key, row.clone());
+        {
+            let table = self.table_mut(table_name)?;
+            for (key, row) in &replacements {
+                table.rows.insert(*key, row.clone());
+            }
         }
         if !replacements.is_empty() {
             self.pending_mutations.push(storage::Mutation::Upsert {
                 table: table_name.to_owned(),
-                rows: replacements.clone(),
+                rows: persisted_replacements,
             });
         }
         Ok(QueryResult {
@@ -304,8 +355,14 @@ impl Database {
         })
     }
 
-    fn execute_select(&self, select: SelectStatement) -> Result<QueryResult, DbError> {
-        let table = self.table(&select.table)?;
+    fn execute_select(&mut self, select: SelectStatement) -> Result<QueryResult, DbError> {
+        let (tables, vectors) = (&self.tables, &mut self.vectors);
+        let table = tables.get(&select.table).ok_or_else(|| {
+            DbError::new(
+                ErrorCategory::TableNotFound,
+                format!("table `{}` does not exist", select.table),
+            )
+        })?;
         let mut columns = Vec::new();
         let mut projections = Vec::new();
         for expression in &select.projections {
@@ -397,18 +454,22 @@ impl Database {
                 if !matches_filter(&table.schema, row, select.filter.as_ref())? {
                     continue;
                 }
-                let distance = crate::vector::l2_distance(
-                    row[vector_index]
-                        .as_vector()
-                        .expect("validated VECTOR column"),
-                    &query,
-                )?;
+                let distance = match &row[vector_index] {
+                    Value::Vector(values) => crate::vector::l2_distance(values, &query)?,
+                    Value::VectorRef(handle) => vectors.l2_distance(*handle, &query)?,
+                    _ => {
+                        return Err(DbError::new(
+                            ErrorCategory::TypeMismatch,
+                            "expected VECTOR value",
+                        ));
+                    }
+                };
                 topk.push(distance, *primary_key);
             }
             let mut rows = Vec::with_capacity(limit);
             for (_, primary_key) in topk.finish() {
                 let row = &table.rows[&primary_key];
-                rows.push(project_row(row, &projections)?);
+                rows.push(project_row(row, &projections, vectors)?);
             }
             return Ok(QueryResult {
                 columns,
@@ -422,7 +483,7 @@ impl Database {
             if !matches_filter(&table.schema, row, select.filter.as_ref())? {
                 continue;
             }
-            let output = project_row(row, &projections)?;
+            let output = project_row(row, &projections, vectors)?;
             let mut sort_values = Vec::with_capacity(order_indices.len());
             for target in &order_indices {
                 sort_values.push(match target {
@@ -513,14 +574,6 @@ impl Database {
         Ok(())
     }
 
-    pub fn checkpoint(&self) -> Result<(), DbError> {
-        let Some(directory) = &self.data_directory else {
-            return Ok(());
-        };
-        let payload = storage::encode_database(&self.tables);
-        storage::append_frame(&directory.join("state.log"), &payload)
-    }
-
     pub fn close(&mut self) -> Result<(), DbError> {
         if let Some(backup) = self.transaction_backup.take() {
             self.tables = backup;
@@ -558,6 +611,24 @@ impl Database {
         storage::append_frame(&directory.join("state.log"), &payload)?;
         self.pending_mutations.clear();
         Ok(())
+    }
+
+    fn materialize_row_for_storage(&mut self, row: &mut Row) -> Result<(), DbError> {
+        for value in row {
+            if let Value::Vector(values) = value {
+                *value = Value::VectorRef(self.vectors.append(values)?);
+            }
+        }
+        Ok(())
+    }
+
+    fn hydrate_row(&mut self, row: &Row) -> Result<Row, DbError> {
+        row.iter()
+            .map(|value| match value {
+                Value::VectorRef(handle) => Ok(Value::Vector(self.vectors.read(*handle)?)),
+                other => Ok(other.clone()),
+            })
+            .collect()
     }
 }
 
@@ -604,10 +675,13 @@ fn matches_filter(
                 (Value::Varchar(right), Value::Varchar(left)) => {
                     Ok(compare_ordering(left.cmp(right), *operator))
                 }
-                (Value::Vector(_), Value::Vector(_)) => Err(DbError::new(
-                    ErrorCategory::Unsupported,
-                    "VECTOR comparison predicates are not supported",
-                )),
+                (Value::Vector(_), Value::Vector(_) | Value::VectorRef(_))
+                | (Value::VectorRef(_), Value::Vector(_) | Value::VectorRef(_)) => {
+                    Err(DbError::new(
+                        ErrorCategory::Unsupported,
+                        "VECTOR comparison predicates are not supported",
+                    ))
+                }
                 _ => Err(DbError::new(
                     ErrorCategory::TypeMismatch,
                     format!("predicate type mismatch for column `{left}`"),
@@ -642,20 +716,39 @@ fn compare_values(left: &Value, right: &Value) -> Ordering {
             .first()
             .partial_cmp(&right.first())
             .unwrap_or(Ordering::Equal),
+        (Value::VectorRef(left), Value::VectorRef(right)) => left.cmp(right),
         _ => Ordering::Equal,
     }
 }
 
-fn project_row(row: &Row, projections: &[Projection]) -> Result<Row, DbError> {
+fn project_row(
+    row: &Row,
+    projections: &[Projection],
+    vectors: &mut VectorStore,
+) -> Result<Row, DbError> {
     let mut output = Vec::with_capacity(projections.len());
     for projection in projections {
         output.push(match projection {
-            Projection::Column(index) => row[*index].clone(),
+            Projection::Column(index) => match &row[*index] {
+                Value::VectorRef(handle) => Value::Vector(vectors.read(*handle)?),
+                other => other.clone(),
+            },
             Projection::L2Distance { index, query } => Value::Float(crate::vector::l2_distance(
-                row[*index].as_vector().expect("validated VECTOR column"),
+                &read_vector_value(vectors, &row[*index])?,
                 query,
             )?),
         });
     }
     Ok(output)
+}
+
+fn read_vector_value(vectors: &mut VectorStore, value: &Value) -> Result<Vec<f32>, DbError> {
+    match value {
+        Value::Vector(values) => Ok(values.clone()),
+        Value::VectorRef(handle) => vectors.read(*handle),
+        _ => Err(DbError::new(
+            ErrorCategory::TypeMismatch,
+            "expected VECTOR value",
+        )),
+    }
 }

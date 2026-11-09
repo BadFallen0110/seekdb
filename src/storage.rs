@@ -7,6 +7,7 @@ use crate::error::{DbError, ErrorCategory};
 use crate::sql::ColumnDefinition;
 use crate::table::{Table, TableSchema};
 use crate::value::{ColumnType, Value};
+use crate::vector_store::VectorStore;
 
 const MAGIC: &[u8; 4] = b"MVD1";
 const HEADER_LENGTH: usize = 12;
@@ -282,6 +283,7 @@ pub fn decode_mutations(bytes: &[u8]) -> Result<Vec<Mutation>, DbError> {
 pub fn apply_mutations(
     tables: &mut BTreeMap<String, Table>,
     mutations: &[Mutation],
+    vectors: &mut VectorStore,
 ) -> Result<(), DbError> {
     for mutation in mutations {
         match mutation {
@@ -299,7 +301,7 @@ pub fn apply_mutations(
                     )
                 })?;
                 for (key, row) in rows {
-                    table.rows.insert(*key, row.clone());
+                    table.rows.insert(*key, materialize_row(row, vectors)?);
                 }
             }
             Mutation::Delete { table, keys } => {
@@ -332,19 +334,94 @@ pub fn apply_mutations(
     Ok(())
 }
 
-pub fn load_database(path: &Path) -> Result<BTreeMap<String, Table>, DbError> {
+pub fn load_database(
+    path: &Path,
+    vectors: &mut VectorStore,
+) -> Result<BTreeMap<String, Table>, DbError> {
     let mut tables = BTreeMap::new();
-    for frame in read_all_frames(path)? {
+    visit_frames(path, |frame| {
         if frame.starts_with(b"MvDB") {
-            tables = decode_database(&frame)?;
+            let decoded = decode_database(&frame)?;
+            tables.clear();
+            for (name, table) in decoded {
+                let rows = table
+                    .rows
+                    .into_iter()
+                    .map(|(key, row)| Ok((key, materialize_row(&row, vectors)?)))
+                    .collect::<Result<_, DbError>>()?;
+                tables.insert(
+                    name,
+                    Table {
+                        schema: table.schema,
+                        rows,
+                    },
+                );
+            }
         } else if frame.starts_with(b"MvOP") {
             let mutations = decode_mutations(&frame)?;
-            apply_mutations(&mut tables, &mutations)?;
+            apply_mutations(&mut tables, &mutations, vectors)?;
         } else {
             return Err(corruption("unknown WAL payload"));
         }
-    }
+        Ok(())
+    })?;
     Ok(tables)
+}
+
+fn visit_frames(
+    path: &Path,
+    mut visit: impl FnMut(Vec<u8>) -> Result<(), DbError>,
+) -> Result<(), DbError> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut file = File::open(path)?;
+    let file_length = file.metadata()?.len();
+    let mut position = 0_u64;
+    while position < file_length {
+        let mut header = [0_u8; HEADER_LENGTH];
+        let remaining = file_length - position;
+        if remaining < HEADER_LENGTH as u64 {
+            break;
+        }
+        file.read_exact(&mut header)?;
+        position += HEADER_LENGTH as u64;
+        if &header[..4] != MAGIC {
+            return Err(corruption("invalid WAL magic before end of log"));
+        }
+        let length =
+            u32::from_le_bytes(header[4..8].try_into().expect("four-byte length")) as usize;
+        let checksum = u32::from_le_bytes(header[8..12].try_into().expect("four-byte checksum"));
+        let payload_end = position
+            .checked_add(length as u64)
+            .ok_or_else(|| corruption("WAL frame length overflow"))?;
+        if payload_end > file_length {
+            break;
+        }
+        let mut payload = vec![0_u8; length];
+        file.read_exact(&mut payload)?;
+        position = payload_end;
+        if crc32(&payload) != checksum {
+            if position < file_length {
+                return Err(corruption("checksum failure before end of WAL"));
+            }
+            break;
+        }
+        visit(payload)?;
+    }
+    Ok(())
+}
+
+fn materialize_row(row: &[Value], vectors: &mut VectorStore) -> Result<Vec<Value>, DbError> {
+    row.iter()
+        .map(|value| match value {
+            Value::Vector(values) => Ok(Value::VectorRef(vectors.append(values)?)),
+            Value::VectorRef(_) => Err(corruption(
+                "WAL contains a VECTOR reference instead of committed VECTOR data",
+            )),
+            other => Ok(other.clone()),
+        })
+        .collect()
 }
 
 fn encode_schema(writer: &mut Vec<u8>, schema: &TableSchema) {
@@ -452,6 +529,10 @@ fn encode_value(writer: &mut Vec<u8>, value: &Value) {
                 writer.extend_from_slice(&component.to_le_bytes());
             }
         }
+        Value::VectorRef(handle) => {
+            writer.push(4);
+            put_u64(writer, *handle);
+        }
     }
 }
 
@@ -548,6 +629,7 @@ impl<'a> Cursor<'a> {
                 }
                 Ok(Value::Vector(values))
             }
+            4 => Ok(Value::VectorRef(self.u64()?)),
             tag => Err(corruption(format!("invalid value tag {tag}"))),
         }
     }

@@ -6,3 +6,4 @@ pub mod storage;
 pub mod table;
 pub mod value;
 pub mod vector;
+pub mod vector_store;

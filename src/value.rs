@@ -6,6 +6,7 @@ pub enum Value {
     Float(f64),
     Varchar(String),
     Vector(Vec<f32>),
+    VectorRef(u64),
 }
 
 impl Value {
@@ -57,6 +58,13 @@ impl Value {
     pub fn as_vector(&self) -> Option<&[f32]> {
         match self {
             Self::Vector(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn as_vector_ref(&self) -> Option<u64> {
+        match self {
+            Self::VectorRef(handle) => Some(*handle),
             _ => None,
         }
     }

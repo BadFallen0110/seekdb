@@ -40,6 +40,10 @@ Equivalent environment variables are `MINIVECTORDDB_DATA_DIR`,
 In the first implementation, `ann` deliberately uses exact scanning so its
 Recall@10 remains 1.0.
 
+`MINIVECTORDDB_CACHE_BYTES` controls the vector page/value cache budget. Its
+default is 64 MiB. Vector payloads use 64 KiB pages and a bounded LRU cache;
+rows retain only compact vector handles.
+
 ## SQL scope
 
 Supported:
@@ -88,7 +92,8 @@ ROLLBACK;
 
 ## Persistence and recovery
 
-Durable state is stored in `/data/state.log`.
+Durable state is stored in `/data/state.log`. `/data/vectors.bin` is a
+rebuildable page store derived from committed WAL records.
 
 - Each auto-commit statement or explicit `COMMIT` appends one checksummed
   mutation frame.
@@ -97,6 +102,8 @@ Durable state is stored in `/data/state.log`.
 - Explicit transactions remain in memory until `COMMIT`; a forced process
   termination therefore discards them.
 - Recovery completes before `READY` is emitted.
+- The vector file is rebuilt from committed WAL before readiness, so an
+  interrupted vector-file update cannot expose partial data.
 - `QUIT`, `EXIT`, `SHUTDOWN`, and `\q` roll back an open transaction, flush
   committed state, and exit.
 
@@ -137,8 +144,8 @@ an independent brute-force oracle. It currently reports Recall@10 = 1.0.
 
 - The official hidden MySQL-case pack and baseline were not available during
   implementation; the adapter is intentionally isolated for later alignment.
-- The first implementation keeps committed rows in memory and persists compact
-  mutation frames. It does not yet satisfy the requirement that data sets larger
-  than the memory limit remain queryable through a bounded page cache.
+- Vector payloads use a bounded cache, but scalar values and primary-key
+  metadata are still held in memory. Extremely large scalar-row sets can still
+  exceed a tight memory budget.
 - `ann` currently returns exact results. A real approximate index is deferred
   until admission correctness is stable.

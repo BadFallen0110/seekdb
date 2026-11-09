@@ -95,6 +95,21 @@
       "command": "target/debug/minivectordb --data-dir <temporary-directory> --ready READY",
       "status": "pass",
       "output": "READY; affected rows 3; filtered result ids 1 and 2 with distances 0.141421374149721 and 1.272792188223375; transaction rollback restored ids 1, 2, and 3."
+    },
+    {
+      "id": "E7",
+      "kind": "bounded_vector_page_cache",
+      "command": "cargo test --test vector_store_contract --test storage_delta_contract",
+      "status": "pass",
+      "output": "1,000 x 128 vector records round-tripped through a 64 KiB cache; vector file exceeded 512 KiB; update, delete, and reopen remained correct."
+    },
+    {
+      "id": "E8",
+      "kind": "persistent_benchmark",
+      "command": "cargo test --release --test benchmark -- --ignored --nocapture",
+      "status": "pass",
+      "output": "rows=10000 dimensions=128 queries=1000 recall=1.000000 write=7.2892644s query=1.5343781s cache_bytes=6151232",
+      "note": "Persistent WAL and page-store path on a Windows OneDrive directory."
     }
   ],
   "retrospective": {
@@ -104,6 +119,7 @@
       "CRUD and filtered exact TopK",
       "single explicit transaction with rollback",
       "incremental checksummed WAL",
+      "bounded paged vector storage with LRU cache",
       "normal restart and forced-kill recovery",
       "framed stdin/stdout protocol",
       "AVX2 L2 kernel with scalar fallback"
@@ -115,13 +131,13 @@
     ]
   },
   "limitations": [
-    "Committed rows are still held in memory; a bounded on-disk page cache is not complete.",
+    "Vector payloads are paged, but scalar values and primary-key metadata are still held in memory.",
     "The official hidden MySQL cases, error codes, readiness marker, and result framing have not been available for conformance testing.",
     "Dockerfile build and Linux container execution remain to be verified after Docker or the official platform is available.",
     "The recorded user prompts show task selection and approval but do not by themselves prove technical understanding or independent result interpretation."
   ],
   "evidence_attribution": {
     "student_contributions": ["/user_prompts/0/content", "/user_prompts/1/content", "/user_prompts/2/content", "/user_prompts/3/content"],
-    "agent_or_tool_only_results": ["/experiments/0/output", "/experiments/1/output", "/experiments/2/output", "/experiments/3/output", "/experiments/4/output", "/experiments/5/output"]
+    "agent_or_tool_only_results": ["/experiments/0/output", "/experiments/1/output", "/experiments/2/output", "/experiments/3/output", "/experiments/4/output", "/experiments/5/output", "/experiments/6/output", "/experiments/7/output"]
   }
 }

@@ -19,11 +19,14 @@ cargo test --release --test benchmark -- --ignored --nocapture
 Result:
 
 ```text
-rows=10000 dimensions=128 queries=1000 recall=1.000000 write=222.7979ms query=1.376657s
+rows=10000 dimensions=128 queries=1000 recall=1.000000 write=7.2892644s query=1.5343781s cache_bytes=6151232
 ```
 
 The benchmark uses an independent brute-force oracle for every query. The
 number is a local regression signal, not an official cgroup-based score.
+This run uses the persistent WAL/page-store path. The write time is dominated
+by 100 commit synchronizations on a Windows OneDrive directory and is not
+directly comparable with the Linux cgroup evaluation environment.
 
 ## Write-amplification check
 
@@ -35,6 +38,13 @@ incremental WAL:     540175 bytes
 ```
 
 The incremental representation reduces this workload's WAL by about 96%.
+
+## Bounded vector cache
+
+The vector-store regression writes 1,000 vectors of 128 dimensions, traverses
+the whole file, updates and deletes rows, reopens with a forced 64 KiB cache,
+and verifies the restored data. The observed cache remains at or below 64 KiB
+while vector records exceed 512 KiB.
 
 ## Forced termination
 
@@ -58,4 +68,5 @@ two `database` rows in distance order, and restored all three rows after
 - Official hidden MySQL-case pack and exact stdout protocol
 - Docker build and Linux x86_64 execution
 - Platform measurements for wall time, physical I/O, and cgroup peak memory
-- A true bounded page cache for data larger than the memory limit
+- Bounded storage for extremely large scalar-row sets; vector payloads are
+  already paged

@@ -225,6 +225,7 @@ fn format_value(value: &Value) -> String {
                 .join(",");
             escape_field(&format!("[{values}]"))
         }
+        Value::VectorRef(handle) => format!("<vector:{handle}>"),
     }
 }
 

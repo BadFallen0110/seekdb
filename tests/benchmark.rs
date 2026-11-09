@@ -1,4 +1,5 @@
 use std::time::Instant;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use minivectordb::db::Database;
 use minivectordb::value::Value;
@@ -61,6 +62,14 @@ fn brute_force(rows: &[RowVector], query: &[f32], category: Option<&str>) -> Vec
 #[test]
 #[ignore = "offline 10k x 128 regression benchmark"]
 fn ten_thousand_vectors_return_exact_recall() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!(
+        "minivectordb-benchmark-{}-{nonce}",
+        std::process::id()
+    ));
     let mut random = 0x1234_5678_9abc_def0_u64;
     let rows = (0..ROWS)
         .map(|id| RowVector {
@@ -70,7 +79,7 @@ fn ten_thousand_vectors_return_exact_recall() {
         })
         .collect::<Vec<_>>();
 
-    let mut database = Database::memory();
+    let mut database = Database::open_with_cache_limit(&directory, 64 * 1024 * 1024).unwrap();
     database
         .execute(
             "CREATE TABLE bench (\
@@ -136,8 +145,19 @@ fn ten_thousand_vectors_return_exact_recall() {
     let query_elapsed = query_started.elapsed();
 
     let recall = matched as f64 / (QUERIES * K) as f64;
+    let cache_bytes = database.vector_cache_bytes();
     eprintln!(
-        "rows={ROWS} dimensions={DIMENSIONS} queries={QUERIES} recall={recall:.6} write={write_elapsed:?} query={query_elapsed:?}"
+        "rows={ROWS} dimensions={DIMENSIONS} queries={QUERIES} recall={recall:.6} write={write_elapsed:?} query={query_elapsed:?} cache_bytes={cache_bytes}"
     );
     assert_eq!(recall, 1.0);
+    database.close().unwrap();
+    let mut reopened = Database::open_with_cache_limit(&directory, 64 * 1024 * 1024).unwrap();
+    assert_eq!(
+        reopened
+            .execute("SELECT id FROM bench ORDER BY id DESC LIMIT 1")
+            .unwrap()
+            .rows[0][0],
+        Value::BigInt(ROWS as i64)
+    );
+    std::fs::remove_dir_all(directory).unwrap();
 }

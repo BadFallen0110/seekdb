@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use minivectordb::db::Database;
+use minivectordb::error::ErrorCategory;
 use minivectordb::value::Value;
 
 fn unique_dir() -> PathBuf {
@@ -79,6 +80,76 @@ fn recovery_replays_ddl_upserts_and_deletes_in_order() {
     assert_eq!(
         result.rows,
         vec![vec![Value::BigInt(1), Value::Varchar("new".to_owned())]]
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn vector_rows_use_the_bounded_page_store() {
+    let directory = unique_dir();
+    let mut database = Database::open_with_cache_limit(&directory, 64 * 1024).unwrap();
+    database
+        .execute("CREATE TABLE docs (id BIGINT PRIMARY KEY, embedding VECTOR(128))")
+        .unwrap();
+    let vector = zero_vector();
+    for batch in 0..10 {
+        let rows = (0..100)
+            .map(|offset| {
+                let id = batch * 100 + offset;
+                format!("({id},'{vector}')")
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        database
+            .execute(&format!("INSERT INTO docs VALUES {rows}"))
+            .unwrap();
+    }
+    let query = format!(
+        "SELECT id, L2_DISTANCE(embedding,'{vector}') AS d \
+         FROM docs ORDER BY d LIMIT 10"
+    );
+    let result = database.execute(&query).unwrap();
+    assert_eq!(result.rows.len(), 10);
+    assert!(database.vector_cache_bytes() <= 64 * 1024);
+    assert!(directory.join("vectors.bin").metadata().unwrap().len() > 512_000);
+    let first_axis = format!("[1,{}]", vec!["0"; 127].join(","));
+    database
+        .execute(&format!(
+            "UPDATE docs SET embedding='{first_axis}' WHERE id=999"
+        ))
+        .unwrap();
+    database.execute("DELETE FROM docs WHERE id=998").unwrap();
+    assert_eq!(
+        database
+            .execute(&format!(
+                "SELECT id, L2_DISTANCE(embedding,'{first_axis}') AS d \
+                 FROM docs ORDER BY d LIMIT 1"
+            ))
+            .unwrap()
+            .rows[0][0],
+        Value::BigInt(999)
+    );
+    let nearest = database
+        .execute(&format!(
+            "SELECT id FROM docs WHERE embedding = '{first_axis}'"
+        ))
+        .unwrap_err();
+    assert_eq!(nearest.category(), ErrorCategory::Unsupported);
+
+    let mut reopened = Database::open_with_cache_limit(&directory, 64 * 1024).unwrap();
+    assert_eq!(
+        reopened
+            .execute("SELECT id FROM docs ORDER BY id DESC LIMIT 1")
+            .unwrap()
+            .rows[0][0],
+        Value::BigInt(999)
+    );
+    assert!(
+        reopened
+            .execute("SELECT id FROM docs WHERE id=998")
+            .unwrap()
+            .rows
+            .is_empty()
     );
     std::fs::remove_dir_all(directory).unwrap();
 }

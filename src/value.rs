@@ -3,6 +3,7 @@ use crate::error::{DbError, ErrorCategory};
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     BigInt(i64),
+    Float(f64),
     Varchar(String),
     Vector(Vec<f32>),
 }

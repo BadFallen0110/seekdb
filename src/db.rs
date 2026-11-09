@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{DbError, ErrorCategory};
 use crate::sql::{
-    Comparison, Expression, Literal, QueryMode, SelectExpression, SelectStatement, Statement, parse,
+    Comparison, Expression, Literal, OrderExpressionKind, QueryMode, SelectExpression,
+    SelectStatement, Statement, parse,
 };
 use crate::storage;
 use crate::table::{Table, TableSchema};
@@ -142,6 +143,28 @@ impl Database {
                     .push(storage::Mutation::DropTable(name));
                 Ok(QueryResult::default())
             }
+            Statement::TruncateTable { name } => {
+                self.reject_ddl_in_transaction("TRUNCATE TABLE")?;
+                let keys = self.table(&name)?.rows.keys().copied().collect::<Vec<_>>();
+                let table = self.table_mut(&name)?;
+                for key in &keys {
+                    table.remove_row(*key);
+                }
+                if !keys.is_empty() {
+                    self.pending_mutations
+                        .push(storage::Mutation::Delete { table: name, keys });
+                }
+                Ok(QueryResult::default())
+            }
+            Statement::ShowTables => Ok(QueryResult {
+                columns: vec!["Tables".to_owned()],
+                rows: self
+                    .tables
+                    .keys()
+                    .map(|name| vec![Value::Varchar(name.clone())])
+                    .collect(),
+                affected: 0,
+            }),
             Statement::Insert {
                 table,
                 columns,
@@ -208,6 +231,7 @@ impl Database {
                 self.query_mode = mode;
                 Ok(QueryResult::default())
             }
+            Statement::Noop => Ok(QueryResult::default()),
         }
     }
 
@@ -413,32 +437,51 @@ impl Database {
         let order_indices = select
             .order_by
             .iter()
-            .map(|order| {
-                columns
+            .map(|order| match &order.expression {
+                OrderExpressionKind::Named(name) => columns
                     .iter()
-                    .position(|column| column.eq_ignore_ascii_case(&order.column_or_alias))
+                    .position(|column| column.eq_ignore_ascii_case(name))
                     .map(OrderTarget::Projection)
                     .or_else(|| {
                         table
                             .schema
-                            .column_index(&order.column_or_alias)
+                            .column_index(name)
                             .ok()
                             .map(OrderTarget::TableColumn)
                     })
                     .ok_or_else(|| {
                         DbError::new(
                             ErrorCategory::ColumnNotFound,
-                            format!("ORDER BY column `{}` does not exist", order.column_or_alias),
+                            format!("ORDER BY column `{name}` does not exist"),
                         )
+                    }),
+                OrderExpressionKind::L2Distance {
+                    column,
+                    vector_literal,
+                } => {
+                    let index = table.schema.column_index(column)?;
+                    let dimensions = match table.schema.columns[index].column_type {
+                        ColumnType::Vector(dimensions) => dimensions,
+                        _ => {
+                            return Err(DbError::new(
+                                ErrorCategory::TypeMismatch,
+                                format!("column `{column}` is not a VECTOR"),
+                            ));
+                        }
+                    };
+                    Ok(OrderTarget::L2Distance {
+                        index,
+                        query: parse_vector(vector_literal, dimensions)?,
                     })
+                }
             })
             .collect::<Result<Vec<_>, _>>()?;
 
         let specialized_topk =
             if let ([order], Some(limit)) = (select.order_by.as_slice(), select.limit) {
                 if order.ascending {
-                    match order_indices[0] {
-                        OrderTarget::Projection(index) => match &projections[index] {
+                    match &order_indices[0] {
+                        OrderTarget::Projection(index) => match &projections[*index] {
                             Projection::L2Distance {
                                 index: vector_index,
                                 query,
@@ -446,6 +489,9 @@ impl Database {
                             Projection::Column(_) | Projection::Literal(_) => None,
                         },
                         OrderTarget::TableColumn(_) => None,
+                        OrderTarget::L2Distance { index, query } => {
+                            Some((limit, *index, query.clone()))
+                        }
                     }
                 } else {
                     None
@@ -490,6 +536,9 @@ impl Database {
                 sort_values.push(match target {
                     OrderTarget::Projection(index) => output[*index].clone(),
                     OrderTarget::TableColumn(index) => row[*index].clone(),
+                    OrderTarget::L2Distance { index, query } => {
+                        Value::Float(distance_for_value(vectors, &row[*index], query)?)
+                    }
                 });
             }
             candidates.push(Candidate {
@@ -592,12 +641,15 @@ impl Database {
             | Statement::Delete { .. }
             | Statement::CreateTable { .. }
             | Statement::DropTable { .. }
+            | Statement::TruncateTable { .. }
             | Statement::CreateVectorIndex { .. } => !in_transaction,
             Statement::Commit => in_transaction,
             Statement::Begin
             | Statement::Rollback
             | Statement::Select(_)
-            | Statement::SetMode(_) => false,
+            | Statement::ShowTables
+            | Statement::SetMode(_)
+            | Statement::Noop => false,
         }
     }
 
@@ -643,6 +695,7 @@ enum Projection {
 enum OrderTarget {
     Projection(usize),
     TableColumn(usize),
+    L2Distance { index: usize, query: Vec<f32> },
 }
 
 struct Candidate {
@@ -655,10 +708,10 @@ fn matching_keys(table: &Table, filter: Option<&Expression>) -> Result<Vec<i64>,
     let mut keys = Vec::new();
     if let Some(candidates) = table.equality_candidates(filter)? {
         for key in candidates {
-            if let Some(row) = table.rows.get(&key) {
-                if matches_filter(&table.schema, row, filter)? {
-                    keys.push(key);
-                }
+            if let Some(row) = table.rows.get(&key)
+                && matches_filter(&table.schema, row, filter)?
+            {
+                keys.push(key);
             }
         }
     } else {
@@ -866,6 +919,21 @@ fn read_vector_value(vectors: &mut VectorStore, value: &Value) -> Result<Vec<f32
     match value {
         Value::Vector(values) => Ok(values.clone()),
         Value::VectorRef(handle) => vectors.read(*handle),
+        _ => Err(DbError::new(
+            ErrorCategory::TypeMismatch,
+            "expected VECTOR value",
+        )),
+    }
+}
+
+fn distance_for_value(
+    vectors: &mut VectorStore,
+    value: &Value,
+    query: &[f32],
+) -> Result<f64, DbError> {
+    match value {
+        Value::Vector(values) => crate::vector::l2_distance(values, query),
+        Value::VectorRef(handle) => vectors.l2_distance(*handle, query),
         _ => Err(DbError::new(
             ErrorCategory::TypeMismatch,
             "expected VECTOR value",

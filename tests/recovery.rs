@@ -11,7 +11,14 @@ struct Harness {
 impl Harness {
     fn start(data_dir: &std::path::Path) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_minivectordb"))
-            .args(["--data-dir", data_dir.to_str().unwrap(), "--ready", "READY"])
+            .args([
+                "--data-dir",
+                data_dir.to_str().unwrap(),
+                "--ready",
+                "READY",
+                "--output",
+                "framed",
+            ])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()

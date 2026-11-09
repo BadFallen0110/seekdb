@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -60,7 +61,7 @@ fn random_transaction_sequences_match_in_memory_oracle_across_restarts() {
         let id = (next(&mut random) % 40) as i64;
         match next(&mut random) % 6 {
             0 | 1 => {
-                if !model.contains_key(&id) {
+                if let Entry::Vacant(entry) = model.entry(id) {
                     let category = format!("c{}", next(&mut random) % 4);
                     let body = format!("v{step}");
                     database
@@ -68,7 +69,7 @@ fn random_transaction_sequences_match_in_memory_oracle_across_restarts() {
                             "INSERT INTO model VALUES ({id},'{category}','{body}')"
                         ))
                         .unwrap();
-                    model.insert(id, (category, body));
+                    entry.insert((category, body));
                 }
             }
             2 => {

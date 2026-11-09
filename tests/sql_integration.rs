@@ -177,6 +177,18 @@ fn scalar_equality_index_tracks_category_updates_and_deletes() {
 }
 
 #[test]
+fn order_by_can_use_l2_distance_without_projecting_it() {
+    let mut db = sample_db();
+    let result = db
+        .execute(
+            "SELECT id FROM docs WHERE category='db' \
+             ORDER BY L2_DISTANCE(embedding,'[1,0]') LIMIT 1",
+        )
+        .unwrap();
+    assert_eq!(result.rows, vec![vec![Value::BigInt(1)]]);
+}
+
+#[test]
 fn binary_accepts_multiple_semicolon_statements() {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -187,7 +199,14 @@ fn binary_accepts_multiple_semicolon_statements() {
         std::process::id()
     ));
     let mut child = Command::new(env!("CARGO_BIN_EXE_minivectordb"))
-        .args(["--data-dir", data_dir.to_str().unwrap(), "--ready", "READY"])
+        .args([
+            "--data-dir",
+            data_dir.to_str().unwrap(),
+            "--ready",
+            "READY",
+            "--output",
+            "framed",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()

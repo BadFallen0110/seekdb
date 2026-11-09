@@ -256,33 +256,32 @@ impl Table {
 
     fn index_row(&mut self, key: i64, row: &Row) {
         for (index, column) in self.schema.columns.iter().enumerate() {
-            if matches!(column.column_type, ColumnType::Varchar(_)) {
-                if let Some(text) = row[index].as_varchar() {
-                    self.equality_index[index]
-                        .entry(hash_text(text))
-                        .or_default()
-                        .push(key);
-                }
+            if matches!(column.column_type, ColumnType::Varchar(_))
+                && let Some(text) = row[index].as_varchar()
+            {
+                self.equality_index[index]
+                    .entry(hash_text(text))
+                    .or_default()
+                    .push(key);
             }
         }
     }
 
     fn unindex_row(&mut self, key: i64, row: &Row) {
         for (index, column) in self.schema.columns.iter().enumerate() {
-            if matches!(column.column_type, ColumnType::Varchar(_)) {
-                if let Some(text) = row[index].as_varchar() {
-                    let hash = hash_text(text);
-                    let mut remove_bucket = false;
-                    if let Some(keys) = self.equality_index[index].get_mut(&hash) {
-                        if let Some(position) = keys.iter().position(|candidate| *candidate == key)
-                        {
-                            keys.swap_remove(position);
-                        }
-                        remove_bucket = keys.is_empty();
+            if matches!(column.column_type, ColumnType::Varchar(_))
+                && let Some(text) = row[index].as_varchar()
+            {
+                let hash = hash_text(text);
+                let mut remove_bucket = false;
+                if let Some(keys) = self.equality_index[index].get_mut(&hash) {
+                    if let Some(position) = keys.iter().position(|candidate| *candidate == key) {
+                        keys.swap_remove(position);
                     }
-                    if remove_bucket {
-                        self.equality_index[index].remove(&hash);
-                    }
+                    remove_bucket = keys.is_empty();
+                }
+                if remove_bucket {
+                    self.equality_index[index].remove(&hash);
                 }
             }
         }

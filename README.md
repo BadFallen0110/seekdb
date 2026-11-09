@@ -58,9 +58,15 @@ Supported:
 - constant queries such as `SELECT 1 AS value`
 - `SELECT *`, ordinary projections, `L2_DISTANCE`, `WHERE`, `AND`,
   `ORDER BY`, and `LIMIT`
+- ordering directly by `L2_DISTANCE(...)` even when the distance is not
+  projected
 - `UPDATE` and `DELETE` by predicate
 - `BEGIN`, `COMMIT`, and `ROLLBACK`
 - `CREATE VECTOR INDEX name ON table(vector_column)`
+- `TRUNCATE TABLE` and `SHOW TABLES`
+- common mysql-test setup such as `SET NAMES`, `SET SESSION sql_mode`,
+  `SET autocommit=1`, `USE`, `NOT NULL` markers, and InnoDB/charset table
+  options
 
 Unsupported SQL is rejected explicitly. `NULL`, JOINs, aggregation, subqueries,
 `ALTER TABLE`, foreign keys, nested transactions, and primary-key updates are

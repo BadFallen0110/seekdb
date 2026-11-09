@@ -12,6 +12,10 @@ pub enum Statement {
         name: String,
         if_exists: bool,
     },
+    TruncateTable {
+        name: String,
+    },
+    ShowTables,
     Insert {
         table: String,
         columns: Option<Vec<String>>,
@@ -36,6 +40,7 @@ pub enum Statement {
     Commit,
     Rollback,
     SetMode(QueryMode),
+    Noop,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -95,8 +100,17 @@ pub enum Comparison {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct OrderExpression {
-    pub column_or_alias: String,
+    pub expression: OrderExpressionKind,
     pub ascending: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum OrderExpressionKind {
+    Named(String),
+    L2Distance {
+        column: String,
+        vector_literal: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -279,7 +293,7 @@ fn lex(source: &str) -> Result<Vec<Token>, DbError> {
         }
         if matches!(
             current,
-            '(' | ')' | ',' | ';' | '*' | '=' | '<' | '>' | '-' | '.'
+            '(' | ')' | ',' | ';' | '*' | '=' | '<' | '>' | '-' | '.' | '@'
         ) {
             let mut symbol = current;
             if current == '<' && chars.get(position + 1) == Some(&'=') {
@@ -340,6 +354,16 @@ impl Parser {
         if self.consume_keyword("INSERT") {
             return self.parse_insert();
         }
+        if self.consume_keyword("TRUNCATE") {
+            self.consume_keyword("TABLE");
+            return Ok(Statement::TruncateTable {
+                name: self.expect_identifier()?,
+            });
+        }
+        if self.consume_keyword("SHOW") {
+            self.expect_keyword("TABLES")?;
+            return Ok(Statement::ShowTables);
+        }
         if self.consume_keyword("SELECT") {
             return self.parse_select();
         }
@@ -350,19 +374,24 @@ impl Parser {
             return self.parse_delete();
         }
         if self.consume_keyword("BEGIN") || self.consume_keyword("START") {
-            if self.peek_is_keyword("TRANSACTION") {
-                self.next();
-            }
+            self.consume_keyword("TRANSACTION");
+            self.consume_keyword("WORK");
             return Ok(Statement::Begin);
         }
         if self.consume_keyword("COMMIT") {
+            self.consume_keyword("WORK");
             return Ok(Statement::Commit);
         }
         if self.consume_keyword("ROLLBACK") {
+            self.consume_keyword("WORK");
             return Ok(Statement::Rollback);
         }
         if self.consume_keyword("SET") {
             return self.parse_set_mode();
+        }
+        if self.consume_keyword("USE") {
+            self.expect_identifier()?;
+            return Ok(Statement::Noop);
         }
         if self.peek_is_keyword("ALTER")
             || self.peek_is_keyword("JOIN")
@@ -419,12 +448,17 @@ impl Parser {
                         );
                     }
                 };
-                let primary_key = if self.consume_keyword("PRIMARY") {
-                    self.expect_keyword("KEY")?;
-                    true
-                } else {
-                    false
-                };
+                let mut primary_key = false;
+                loop {
+                    if self.consume_keyword("NOT") {
+                        self.expect_keyword("NULL")?;
+                    } else if self.consume_keyword("PRIMARY") {
+                        self.expect_keyword("KEY")?;
+                        primary_key = true;
+                    } else {
+                        break;
+                    }
+                }
                 columns.push(ColumnDefinition {
                     name: column_name,
                     column_type,
@@ -436,6 +470,30 @@ impl Parser {
             }
             self.expect_symbol(')')?;
             break;
+        }
+        while !matches!(self.peek().kind, TokenKind::End) && !self.peek_symbol(';') {
+            let known = [
+                "ENGINE",
+                "DEFAULT",
+                "CHARSET",
+                "CHARACTER",
+                "COLLATE",
+                "COMMENT",
+                "ROW_FORMAT",
+                "AUTO_INCREMENT",
+            ]
+            .iter()
+            .any(|keyword| self.consume_keyword(keyword));
+            if !known {
+                return Err(self.unsupported("unsupported CREATE TABLE option"));
+            }
+            self.consume_keyword("SET");
+            if self.consume_symbol('=') {
+                match self.next().kind {
+                    TokenKind::Identifier(_) | TokenKind::String(_) | TokenKind::Number(_) => {}
+                    _ => return Err(self.syntax("expected CREATE TABLE option value")),
+                }
+            }
         }
         Ok(Statement::CreateTable {
             name,
@@ -561,14 +619,27 @@ impl Parser {
             self.expect_keyword("BY")?;
             let mut items = Vec::new();
             loop {
-                let column_or_alias = self.expect_identifier()?;
+                let expression = if self.peek_is_keyword("L2_DISTANCE") {
+                    self.next();
+                    self.expect_symbol('(')?;
+                    let column = self.expect_identifier()?;
+                    self.expect_symbol(',')?;
+                    let vector_literal = self.expect_string()?;
+                    self.expect_symbol(')')?;
+                    OrderExpressionKind::L2Distance {
+                        column,
+                        vector_literal,
+                    }
+                } else {
+                    OrderExpressionKind::Named(self.expect_identifier()?)
+                };
                 let ascending = if self.consume_keyword("ASC") {
                     true
                 } else {
                     !self.consume_keyword("DESC")
                 };
                 items.push(OrderExpression {
-                    column_or_alias,
+                    expression,
                     ascending,
                 });
                 if !self.consume_symbol(',') {
@@ -632,16 +703,55 @@ impl Parser {
     }
 
     fn parse_set_mode(&mut self) -> Result<Statement, DbError> {
+        while self.consume_symbol('@') {}
         let mut name = self.expect_identifier()?;
-        if self.consume_symbol('.') {
+        if name.eq_ignore_ascii_case("SESSION") || name.eq_ignore_ascii_case("GLOBAL") {
+            self.consume_symbol('.');
+            name = self.expect_identifier()?;
+        } else if self.consume_symbol('.') {
             name = self.expect_identifier()?;
         }
+        if name.eq_ignore_ascii_case("NAMES") {
+            match self.next().kind {
+                TokenKind::Identifier(_) | TokenKind::String(_) => {}
+                _ => return Err(self.syntax("SET NAMES requires a value")),
+            }
+            if self.consume_keyword("COLLATE") {
+                self.expect_identifier()?;
+            }
+            return Ok(Statement::Noop);
+        }
         self.expect_symbol('=')?;
-        let value = self.expect_string()?;
+        let value = match self.next().kind {
+            TokenKind::String(value) | TokenKind::Identifier(value) => value,
+            TokenKind::Number(value) => value,
+            _ => return Err(self.syntax("SET requires a scalar value")),
+        };
         if !name.eq_ignore_ascii_case("MODE")
             && !name.eq_ignore_ascii_case("QUERY_MODE")
             && !name.eq_ignore_ascii_case("MINIVECTORDB_QUERY_MODE")
         {
+            let harmless = [
+                "SQL_MODE",
+                "TIME_ZONE",
+                "FOREIGN_KEY_CHECKS",
+                "UNIQUE_CHECKS",
+                "CHARACTER_SET_RESULTS",
+                "COLLATION_CONNECTION",
+                "SQL_SAFE_UPDATES",
+            ]
+            .iter()
+            .any(|variable| name.eq_ignore_ascii_case(variable));
+            if harmless {
+                return Ok(Statement::Noop);
+            }
+            if name.eq_ignore_ascii_case("AUTOCOMMIT") {
+                return if matches!(value.as_str(), "1" | "ON" | "on") {
+                    Ok(Statement::Noop)
+                } else {
+                    Err(self.unsupported("SET autocommit=0 is not supported; use BEGIN"))
+                };
+            }
             return Err(self.unsupported(format!("SET variable `{name}` is not supported")));
         }
         match value.to_ascii_lowercase().as_str() {

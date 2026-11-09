@@ -11,6 +11,9 @@ cargo test
 Result: pass. The suite covers parser acceptance and rejection, Unicode
 `VARCHAR`, finite `float32` vectors, CRUD, filtered TopK, transaction rollback,
 incremental WAL recovery, forced-kill recovery, and TopK tie ordering.
+It also includes a deterministic 240-step transaction model with periodic
+restarts, scalar-index maintenance checks, common mysql-test setup statements,
+direct `ORDER BY L2_DISTANCE(...)`, and protocol output-mode tests.
 
 ```text
 cargo test --release --test benchmark -- --ignored --nocapture
@@ -66,7 +69,8 @@ two `database` rows in distance order, and restored all three rows after
 ## Pending verification
 
 - Official hidden MySQL-case pack and exact stdout protocol
-- Docker build and Linux x86_64 execution
+- Docker image build; a static `x86_64-unknown-linux-musl` release build does
+  succeed locally
 - Platform measurements for wall time, physical I/O, and cgroup peak memory
 - Bounded storage for extremely large scalar-row sets; vector payloads are
   already paged

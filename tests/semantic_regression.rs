@@ -130,3 +130,83 @@ fn mysql_style_if_exists_setup_commands_are_idempotent() {
     database.execute("DROP TABLE IF EXISTS docs").unwrap();
     database.execute("DROP TABLE IF EXISTS docs").unwrap();
 }
+
+#[test]
+fn common_not_null_column_markers_are_accepted() {
+    let mut database = Database::memory();
+    database
+        .execute(
+            "CREATE TABLE docs (\
+               id BIGINT PRIMARY KEY NOT NULL,\
+               body VARCHAR(8) NOT NULL\
+             )",
+        )
+        .unwrap();
+    database
+        .execute("INSERT INTO docs VALUES (1,'ok')")
+        .unwrap();
+    assert_eq!(
+        database.execute("SELECT body FROM docs").unwrap().rows,
+        vec![vec![Value::Varchar("ok".to_owned())]]
+    );
+}
+
+#[test]
+fn common_mysql_table_options_are_accepted() {
+    let mut database = Database::memory();
+    database
+        .execute(
+            "CREATE TABLE docs (id BIGINT PRIMARY KEY, body VARCHAR(8)) \
+             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin",
+        )
+        .unwrap();
+}
+
+#[test]
+fn truncate_table_preserves_schema_and_clears_rows() {
+    let mut database = database();
+    database
+        .execute("INSERT INTO docs VALUES (1,'x','a','[0,0]')")
+        .unwrap();
+    database.execute("TRUNCATE TABLE docs").unwrap();
+    assert!(
+        database
+            .execute("SELECT * FROM docs")
+            .unwrap()
+            .rows
+            .is_empty()
+    );
+    database
+        .execute("INSERT INTO docs VALUES (2,'x','b','[0,0]')")
+        .unwrap();
+}
+
+#[test]
+fn show_tables_returns_sorted_names() {
+    let mut database = Database::memory();
+    database
+        .execute("CREATE TABLE z_docs (id BIGINT PRIMARY KEY)")
+        .unwrap();
+    database
+        .execute("CREATE TABLE a_docs (id BIGINT PRIMARY KEY)")
+        .unwrap();
+    assert_eq!(
+        database.execute("SHOW TABLES").unwrap().rows,
+        vec![
+            vec![Value::Varchar("a_docs".to_owned())],
+            vec![Value::Varchar("z_docs".to_owned())]
+        ]
+    );
+}
+
+#[test]
+fn common_mysqltest_session_setup_is_supported() {
+    let mut database = Database::memory();
+    database.execute("SET NAMES utf8mb4").unwrap();
+    database.execute("SET @@session.sql_mode=''").unwrap();
+    database.execute("SET SESSION time_zone='+00:00'").unwrap();
+    database.execute("SET autocommit=1").unwrap();
+    database.execute("USE test").unwrap();
+    let error = database.execute("SET autocommit=0").unwrap_err();
+    assert_eq!(error.category(), ErrorCategory::Unsupported);
+}

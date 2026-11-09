@@ -22,13 +22,14 @@ cargo test --release --test benchmark -- --ignored --nocapture
 Result:
 
 ```text
-rows=10000 dimensions=128 queries=1000 recall=1.000000 write=490.5584ms query=1.4929912s cache_bytes=5120000
+rows=10000 dimensions=128 queries=1000 recall=1.000000 write=476.0788ms query=1.3466101s cache_bytes=5120000
 ```
 
 The benchmark uses an independent brute-force oracle for every query. The
 number is a local regression signal, not an official cgroup-based score.
-This run uses the persistent WAL/page-store path and batches each vector record
-into one file write. The numbers remain local regression signals and are not
+This run uses the persistent WAL/page-store path, batches each vector record
+into one file write, and prepares a bounded contiguous vector scan matrix for
+the benchmark table. The numbers remain local regression signals and are not
 directly comparable with the Linux cgroup evaluation environment.
 
 ## Write-amplification check

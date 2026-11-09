@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::error::{DbError, ErrorCategory};
 use crate::sql::{
@@ -530,28 +531,14 @@ impl Database {
             let mut topk = crate::vector::TopKAccumulator::new(limit);
             if dense_ready {
                 let dense = dense_vectors.expect("dense cache was just built");
-                let allowed = table
-                    .equality_candidates(select.filter.as_ref())?
-                    .map(|keys| keys.into_iter().collect::<std::collections::HashSet<_>>());
-                for (row_index, primary_key) in dense.ids.iter().enumerate() {
-                    if allowed
-                        .as_ref()
-                        .is_some_and(|allowed| !allowed.contains(primary_key))
-                    {
-                        continue;
-                    }
-                    if select.filter.is_some() {
-                        let row = &table.rows[primary_key];
-                        if !matches_filter(&table.schema, row, select.filter.as_ref())? {
-                            continue;
-                        }
-                    }
-                    let start = row_index * dense.dimensions;
-                    let distance = crate::vector::l2_distance(
-                        &dense.data[start..start + dense.dimensions],
-                        &query,
-                    )?;
-                    topk.push(distance, *primary_key);
+                for (distance, primary_key) in dense_topk(
+                    dense,
+                    table,
+                    select.filter.as_ref(),
+                    &query,
+                    limit,
+                )? {
+                    topk.push(distance, primary_key);
                 }
             } else {
                 for_each_matching_row(table, select.filter.as_ref(), |primary_key, row| {
@@ -881,6 +868,117 @@ fn for_each_matching_row(
         }
     }
     Ok(())
+}
+
+fn dense_topk(
+    dense: &DenseVectorCache,
+    table: &Table,
+    filter: Option<&Expression>,
+    query: &[f32],
+    limit: usize,
+) -> Result<Vec<(f64, i64)>, DbError> {
+    if limit == 0 || dense.ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let allowed = table
+        .equality_candidates(filter)?
+        .map(|keys| keys.into_iter().collect::<HashSet<_>>());
+    let parallelism = dense_parallelism();
+    let thread_count = (dense.ids.len() / 2_048).min(parallelism).max(1);
+    if thread_count == 1 {
+        return scan_dense_range(
+            dense,
+            table,
+            filter,
+            allowed.as_ref(),
+            query,
+            limit,
+            0,
+            dense.ids.len(),
+        );
+    }
+    let chunk_size = dense.ids.len().div_ceil(thread_count);
+    let partials = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(thread_count);
+        for thread_index in 0..thread_count {
+            let start = thread_index * chunk_size;
+            let end = (start + chunk_size).min(dense.ids.len());
+            if start >= end {
+                break;
+            }
+            let allowed = allowed.as_ref();
+            handles.push(scope.spawn(move || {
+                scan_dense_range(
+                    dense,
+                    table,
+                    filter,
+                    allowed,
+                    query,
+                    limit,
+                    start,
+                    end,
+                )
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle.join().map_err(|_| {
+                    DbError::new(ErrorCategory::Corruption, "vector query worker panicked")
+                })?
+            })
+            .collect::<Result<Vec<_>, DbError>>()
+    })?;
+
+    let mut merged = crate::vector::TopKAccumulator::new(limit);
+    for partial in partials {
+        for (distance, primary_key) in partial {
+            merged.push(distance, primary_key);
+        }
+    }
+    Ok(merged.finish())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn scan_dense_range(
+    dense: &DenseVectorCache,
+    table: &Table,
+    filter: Option<&Expression>,
+    allowed: Option<&HashSet<i64>>,
+    query: &[f32],
+    limit: usize,
+    start: usize,
+    end: usize,
+) -> Result<Vec<(f64, i64)>, DbError> {
+    let mut topk = crate::vector::TopKAccumulator::new(limit);
+    for (row_index, primary_key) in dense.ids.iter().enumerate().take(end).skip(start) {
+        if allowed.is_some_and(|allowed| !allowed.contains(primary_key)) {
+            continue;
+        }
+        if filter.is_some() {
+            let row = &table.rows[primary_key];
+            if !matches_filter(&table.schema, row, filter)? {
+                continue;
+            }
+        }
+        let vector_start = row_index * dense.dimensions;
+        let distance = crate::vector::l2_distance(
+            &dense.data[vector_start..vector_start + dense.dimensions],
+            query,
+        )?;
+        topk.push(distance, *primary_key);
+    }
+    Ok(topk.finish())
+}
+
+fn dense_parallelism() -> usize {
+    static PARALLELISM: OnceLock<usize> = OnceLock::new();
+    *PARALLELISM.get_or_init(|| {
+        std::thread::available_parallelism()
+            .map(usize::from)
+            .unwrap_or(1)
+            .min(2)
+    })
 }
 
 fn matches_filter(

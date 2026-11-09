@@ -77,7 +77,9 @@ remain in memory, which is the primary remaining large-data limitation.
 For tables whose vectors fit within half of the configured cache budget, the
 query layer prepares a temporary contiguous vector matrix. This avoids per-row
 hash/cache lookups during TopK scans; any table mutation invalidates the matrix
-and the exact page-backed path remains available for larger tables.
+and the exact page-backed path remains available for larger tables. Dense scans
+split into at most two scoped worker ranges and merge per-range TopK results
+using the same distance/primary-key ordering.
 
 ## Recovery Sequence
 

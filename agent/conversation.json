@@ -119,7 +119,7 @@
       "kind": "persistent_benchmark",
       "command": "cargo test --release --test benchmark -- --ignored --nocapture",
       "status": "pass",
-      "output": "rows=10000 dimensions=128 queries=1000 recall=1.000000 write=490.5584ms query=1.4929912s cache_bytes=5120000",
+      "output": "rows=10000 dimensions=128 queries=1000 recall=1.000000 write=476.0788ms query=1.3466101s cache_bytes=5120000",
       "note": "Persistent WAL and page-store path on a Windows OneDrive directory."
     },
     {

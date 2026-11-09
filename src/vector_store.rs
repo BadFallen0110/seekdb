@@ -104,31 +104,54 @@ struct PagedStore {
     file: File,
     path: PathBuf,
     end: u64,
+    offsets: Vec<u64>,
     cache: PageCache,
     vector_cache: VectorValueCache,
     byte_scratch: Vec<u8>,
     vector_scratch: Vec<f32>,
+    append_scratch: Vec<u8>,
 }
 
 impl PagedStore {
     fn open(path: &Path, cache_limit: usize) -> Result<Self, DbError> {
-        let file = OpenOptions::new()
+        let mut file = OpenOptions::new()
             .create(true)
             .truncate(false)
             .read(true)
             .write(true)
             .open(path)?;
         let end = file.metadata()?.len();
+        let mut offsets = Vec::new();
+        let mut position = 0_u64;
+        while position < end {
+            file.seek(SeekFrom::Start(position))?;
+            let mut length = [0_u8; 4];
+            file.read_exact(&mut length)?;
+            offsets.push(position);
+            position = position
+                .checked_add(4 + u64::from(u32::from_le_bytes(length)) * 4)
+                .ok_or_else(|| {
+                    DbError::new(ErrorCategory::Corruption, "VECTOR file offset overflow")
+                })?;
+            if position > end {
+                return Err(DbError::new(
+                    ErrorCategory::Corruption,
+                    "truncated VECTOR record in page file",
+                ));
+            }
+        }
         let page_limit = cache_limit.min(1024 * 1024);
         let vector_limit = cache_limit.saturating_sub(page_limit);
         Ok(Self {
             file,
             path: path.to_path_buf(),
             end,
+            offsets,
             cache: PageCache::new(page_limit.max(PAGE_SIZE as usize)),
             vector_cache: VectorValueCache::new(vector_limit),
             byte_scratch: Vec::new(),
             vector_scratch: Vec::new(),
+            append_scratch: Vec::new(),
         })
     }
 
@@ -139,18 +162,26 @@ impl PagedStore {
                 "VECTOR dimension does not fit in the storage format",
             )
         })?;
-        let handle = self.end;
-        self.file.seek(SeekFrom::Start(handle))?;
-        self.file.write_all(&length.to_le_bytes())?;
+        let handle = self.offsets.len() as u64;
+        let record_offset = self.end;
+        self.file.seek(SeekFrom::Start(record_offset))?;
+        let mut encoded = std::mem::take(&mut self.append_scratch);
+        encoded.clear();
+        encoded.extend_from_slice(&length.to_le_bytes());
+        encoded.reserve(std::mem::size_of_val(values));
         for value in values {
-            self.file.write_all(&value.to_le_bytes())?;
+            encoded.extend_from_slice(&value.to_le_bytes());
         }
+        let write_result = self.file.write_all(&encoded);
+        self.append_scratch = encoded;
+        write_result?;
         self.end = self
             .end
             .checked_add(4 + u64::from(length) * 4)
             .ok_or_else(|| DbError::new(ErrorCategory::Range, "VECTOR storage offset overflow"))?;
-        self.cache.invalidate_from(handle);
-        self.vector_cache.invalidate_from(handle);
+        self.offsets.push(record_offset);
+        self.cache.invalidate_from(record_offset);
+        self.vector_cache.insert(handle, values.to_vec());
         Ok(handle)
     }
 
@@ -161,21 +192,22 @@ impl PagedStore {
     }
 
     fn read_into(&mut self, handle: u64, output: &mut Vec<f32>) -> Result<(), DbError> {
-        if handle >= self.end {
-            return Err(invalid_vector_handle(handle));
-        }
+        let record_offset = *self
+            .offsets
+            .get(handle as usize)
+            .ok_or_else(|| invalid_vector_handle(handle))?;
         if self.vector_cache.get_into(handle, output) {
             return Ok(());
         }
         let mut length_bytes = [0_u8; 4];
-        self.read_bytes_into(handle, &mut length_bytes)?;
+        self.read_bytes_into(record_offset, &mut length_bytes)?;
         let length = u32::from_le_bytes(length_bytes) as usize;
         let byte_length = length
             .checked_mul(4)
             .ok_or_else(|| DbError::new(ErrorCategory::Corruption, "VECTOR length overflow"))?;
         let mut scratch = std::mem::take(&mut self.byte_scratch);
         scratch.resize(byte_length, 0);
-        let read_result = self.read_bytes_into(handle + 4, &mut scratch);
+        let read_result = self.read_bytes_into(record_offset + 4, &mut scratch);
         self.byte_scratch = scratch;
         read_result?;
         output.clear();
@@ -188,9 +220,9 @@ impl PagedStore {
     }
 
     fn l2_distance(&mut self, handle: u64, query: &[f32]) -> Result<f64, DbError> {
-        if handle >= self.end {
-            return Err(invalid_vector_handle(handle));
-        }
+        self.offsets
+            .get(handle as usize)
+            .ok_or_else(|| invalid_vector_handle(handle))?;
         if let Some(values) = self.vector_cache.get(handle) {
             return l2_distance(values, query);
         }
@@ -258,11 +290,10 @@ struct VectorValueCache {
     limit: usize,
     bytes: usize,
     tick: u64,
-    values: HashMap<u64, CachedVector>,
+    values: Vec<Option<CachedVector>>,
 }
 
 struct CachedVector {
-    offset: u64,
     tick: u64,
     values: Vec<f32>,
 }
@@ -273,14 +304,14 @@ impl VectorValueCache {
             limit,
             bytes: 0,
             tick: 0,
-            values: HashMap::new(),
+            values: Vec::new(),
         }
     }
 
     fn get_into(&mut self, handle: u64, output: &mut Vec<f32>) -> bool {
         self.tick += 1;
         let tick = self.tick;
-        let Some(cached) = self.values.get_mut(&handle) else {
+        let Some(Some(cached)) = self.values.get_mut(handle as usize) else {
             return false;
         };
         cached.tick = tick;
@@ -292,7 +323,7 @@ impl VectorValueCache {
     fn get(&mut self, handle: u64) -> Option<&[f32]> {
         self.tick += 1;
         let tick = self.tick;
-        let cached = self.values.get_mut(&handle)?;
+        let cached = self.values.get_mut(handle as usize)?.as_mut()?;
         cached.tick = tick;
         Some(&cached.values)
     }
@@ -305,43 +336,34 @@ impl VectorValueCache {
         if byte_count > self.limit {
             return;
         }
+        let index = handle as usize;
+        if index >= self.values.len() {
+            self.values.resize_with(index + 1, || None);
+        }
+        if let Some(previous) = self.values[index].take() {
+            self.bytes -= previous.values.len() * std::mem::size_of::<f32>();
+        }
         while self.bytes.saturating_add(byte_count) > self.limit {
             let Some(oldest) = self
                 .values
                 .iter()
-                .min_by_key(|(_, cached)| cached.tick)
-                .map(|(handle, _)| *handle)
+                .enumerate()
+                .filter_map(|(index, cached)| cached.as_ref().map(|cached| (index, cached.tick)))
+                .min_by_key(|(_, tick)| *tick)
+                .map(|(index, _)| index)
             else {
                 return;
             };
-            if let Some(removed) = self.values.remove(&oldest) {
+            if let Some(removed) = self.values[oldest].take() {
                 self.bytes -= removed.values.len() * std::mem::size_of::<f32>();
             }
         }
         self.tick += 1;
-        self.values.insert(
-            handle,
-            CachedVector {
-                offset: handle,
-                tick: self.tick,
-                values,
-            },
-        );
+        self.values[index] = Some(CachedVector {
+            tick: self.tick,
+            values,
+        });
         self.bytes += byte_count;
-    }
-
-    fn invalidate_from(&mut self, offset: u64) {
-        let affected = self
-            .values
-            .iter()
-            .filter(|(_, cached)| cached.offset >= offset)
-            .map(|(handle, _)| *handle)
-            .collect::<Vec<_>>();
-        for handle in affected {
-            if let Some(removed) = self.values.remove(&handle) {
-                self.bytes -= removed.values.len() * std::mem::size_of::<f32>();
-            }
-        }
     }
 }
 

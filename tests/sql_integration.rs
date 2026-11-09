@@ -88,3 +88,52 @@ fn duplicate_primary_key_is_rejected() {
         .unwrap_err();
     assert_eq!(error.category(), ErrorCategory::DuplicateKey);
 }
+
+#[test]
+fn rollback_restores_scalar_and_vector_queries() {
+    let mut db = sample_db();
+    db.execute("BEGIN").unwrap();
+    db.execute("UPDATE docs SET embedding='[0,1]' WHERE id=1")
+        .unwrap();
+    let own_write = db
+        .execute(
+            "SELECT id, L2_DISTANCE(embedding,'[1,0]') AS d \
+             FROM docs ORDER BY d LIMIT 1",
+        )
+        .unwrap();
+    assert_eq!(own_write.rows[0][0], Value::BigInt(2));
+    db.execute("ROLLBACK").unwrap();
+    let restored = db
+        .execute(
+            "SELECT id, L2_DISTANCE(embedding,'[1,0]') AS d \
+             FROM docs ORDER BY d LIMIT 1",
+        )
+        .unwrap();
+    assert_eq!(restored.rows[0][0], Value::BigInt(1));
+}
+
+#[test]
+fn commit_keeps_successful_statements_and_failed_statement_is_atomic() {
+    let mut db = sample_db();
+    db.execute("BEGIN").unwrap();
+    db.execute("DELETE FROM docs WHERE id=2").unwrap();
+    let error = db
+        .execute("UPDATE docs SET embedding='[bad,0]' WHERE id=1")
+        .unwrap_err();
+    assert_eq!(error.category(), ErrorCategory::TypeMismatch);
+    assert_eq!(db.execute("SELECT * FROM docs").unwrap().rows.len(), 2);
+    db.execute("COMMIT").unwrap();
+    assert_eq!(db.execute("SELECT * FROM docs").unwrap().rows.len(), 2);
+}
+
+#[test]
+fn nested_begin_is_rejected_without_losing_the_active_transaction() {
+    let mut db = sample_db();
+    db.execute("BEGIN").unwrap();
+    db.execute("DELETE FROM docs WHERE id=1").unwrap();
+    let error = db.execute("BEGIN").unwrap_err();
+    assert_eq!(error.category(), ErrorCategory::Transaction);
+    assert_eq!(db.execute("SELECT * FROM docs").unwrap().rows.len(), 2);
+    db.execute("ROLLBACK").unwrap();
+    assert_eq!(db.execute("SELECT * FROM docs").unwrap().rows.len(), 3);
+}

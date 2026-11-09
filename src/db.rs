@@ -21,6 +21,7 @@ pub struct QueryResult {
 pub struct Database {
     tables: BTreeMap<String, Table>,
     query_mode: QueryMode,
+    transaction_backup: Option<BTreeMap<String, Table>>,
 }
 
 impl Database {
@@ -28,6 +29,7 @@ impl Database {
         Self {
             tables: BTreeMap::new(),
             query_mode: QueryMode::Exact,
+            transaction_backup: None,
         }
     }
 
@@ -47,6 +49,7 @@ impl Database {
     fn execute_statement(&mut self, statement: Statement) -> Result<QueryResult, DbError> {
         match statement {
             Statement::CreateTable { name, columns } => {
+                self.reject_ddl_in_transaction("CREATE TABLE")?;
                 if self.table(&name).is_ok() {
                     return Err(DbError::new(
                         ErrorCategory::TableExists,
@@ -58,6 +61,7 @@ impl Database {
                 Ok(QueryResult::default())
             }
             Statement::DropTable { name } => {
+                self.reject_ddl_in_transaction("DROP TABLE")?;
                 self.tables.remove(&name).ok_or_else(|| {
                     DbError::new(
                         ErrorCategory::TableNotFound,
@@ -83,6 +87,7 @@ impl Database {
                 table,
                 column,
             } => {
+                self.reject_ddl_in_transaction("CREATE VECTOR INDEX")?;
                 let table = self.table_mut(&table)?;
                 let column_index = table.schema.column_index(&column)?;
                 if !matches!(
@@ -97,10 +102,29 @@ impl Database {
                 table.schema.vector_index_name = Some(name);
                 Ok(QueryResult::default())
             }
-            Statement::Begin | Statement::Commit | Statement::Rollback => Err(DbError::new(
-                ErrorCategory::Unsupported,
-                "explicit transactions are not implemented yet",
-            )),
+            Statement::Begin => {
+                if self.transaction_backup.is_some() {
+                    return Err(DbError::new(
+                        ErrorCategory::Transaction,
+                        "nested transactions are not supported",
+                    ));
+                }
+                self.transaction_backup = Some(self.tables.clone());
+                Ok(QueryResult::default())
+            }
+            Statement::Commit => {
+                self.transaction_backup.take().ok_or_else(|| {
+                    DbError::new(ErrorCategory::Transaction, "no transaction is active")
+                })?;
+                Ok(QueryResult::default())
+            }
+            Statement::Rollback => {
+                let backup = self.transaction_backup.take().ok_or_else(|| {
+                    DbError::new(ErrorCategory::Transaction, "no transaction is active")
+                })?;
+                self.tables = backup;
+                Ok(QueryResult::default())
+            }
             Statement::SetMode(mode) => {
                 self.query_mode = mode;
                 Ok(QueryResult::default())
@@ -376,6 +400,16 @@ impl Database {
                 format!("table `{name}` does not exist"),
             )
         })
+    }
+
+    fn reject_ddl_in_transaction(&self, operation: &str) -> Result<(), DbError> {
+        if self.transaction_backup.is_some() {
+            return Err(DbError::new(
+                ErrorCategory::Transaction,
+                format!("{operation} is not allowed inside an explicit transaction"),
+            ));
+        }
+        Ok(())
     }
 }
 

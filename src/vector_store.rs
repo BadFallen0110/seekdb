@@ -77,6 +77,12 @@ impl VectorStore {
         }
     }
 
+    pub fn clear_value_cache(&mut self) {
+        if let Backend::Paged(store) = &mut self.backend {
+            store.vector_cache = VectorValueCache::new(store.vector_cache.limit);
+        }
+    }
+
     pub fn sync_data(&mut self) -> Result<(), DbError> {
         if let Backend::Paged(store) = &mut self.backend {
             store.file.flush()?;

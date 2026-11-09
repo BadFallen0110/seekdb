@@ -131,6 +131,7 @@ pub struct Table {
     pub schema: TableSchema,
     pub rows: BTreeMap<i64, Row>,
     equality_index: Vec<HashMap<u64, Vec<i64>>>,
+    mutation_generation: u64,
 }
 
 impl Table {
@@ -139,6 +140,7 @@ impl Table {
             equality_index: (0..schema.columns.len()).map(|_| HashMap::new()).collect(),
             schema,
             rows: BTreeMap::new(),
+            mutation_generation: 0,
         }
     }
 
@@ -147,6 +149,7 @@ impl Table {
             equality_index: (0..schema.columns.len()).map(|_| HashMap::new()).collect(),
             schema,
             rows: BTreeMap::new(),
+            mutation_generation: 0,
         };
         for (key, row) in rows {
             table.index_row(key, &row);
@@ -175,6 +178,9 @@ impl Table {
             self.index_row(*key, row);
         }
         self.rows.extend(pending);
+        if affected > 0 {
+            self.mutation_generation = self.mutation_generation.wrapping_add(1);
+        }
         Ok(affected)
     }
 
@@ -184,12 +190,18 @@ impl Table {
         }
         self.index_row(key, &row);
         self.rows.insert(key, row);
+        self.mutation_generation = self.mutation_generation.wrapping_add(1);
     }
 
     pub fn remove_row(&mut self, key: i64) -> Option<Row> {
         let row = self.rows.remove(&key)?;
         self.unindex_row(key, &row);
+        self.mutation_generation = self.mutation_generation.wrapping_add(1);
         Some(row)
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.mutation_generation
     }
 
     pub fn equality_candidates(

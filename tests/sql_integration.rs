@@ -201,6 +201,30 @@ fn duplicate_insert_column_names_are_rejected() {
 }
 
 #[test]
+fn drop_and_recreate_discards_prepared_vector_scan_state() {
+    let mut db = Database::memory();
+    db.execute("CREATE TABLE docs (id BIGINT PRIMARY KEY, embedding VECTOR(2))")
+        .unwrap();
+    db.execute("INSERT INTO docs VALUES (1,'[1,0]')").unwrap();
+    db.execute(
+        "SELECT id, L2_DISTANCE(embedding,'[1,0]') AS d \
+         FROM docs ORDER BY d LIMIT 1",
+    )
+    .unwrap();
+    db.execute("DROP TABLE docs").unwrap();
+    db.execute("CREATE TABLE docs (id BIGINT PRIMARY KEY, embedding VECTOR(2))")
+        .unwrap();
+    db.execute("INSERT INTO docs VALUES (2,'[0,1]')").unwrap();
+    let result = db
+        .execute(
+            "SELECT id, L2_DISTANCE(embedding,'[1,0]') AS d \
+             FROM docs ORDER BY d LIMIT 1",
+        )
+        .unwrap();
+    assert_eq!(result.rows[0][0], Value::BigInt(2));
+}
+
+#[test]
 fn binary_accepts_multiple_semicolon_statements() {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)

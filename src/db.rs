@@ -27,6 +27,8 @@ pub struct Database {
     data_directory: Option<PathBuf>,
     pending_mutations: Vec<storage::Mutation>,
     vectors: VectorStore,
+    dense_vectors: Option<DenseVectorCache>,
+    dense_cache_budget: usize,
 }
 
 impl Database {
@@ -38,6 +40,8 @@ impl Database {
             data_directory: None,
             pending_mutations: Vec::new(),
             vectors: VectorStore::memory(),
+            dense_vectors: None,
+            dense_cache_budget: 64 * 1024 * 1024,
         }
     }
 
@@ -76,6 +80,8 @@ impl Database {
             data_directory: Some(data_directory),
             pending_mutations: Vec::new(),
             vectors,
+            dense_vectors: None,
+            dense_cache_budget: cache_limit / 2,
         })
     }
 
@@ -89,6 +95,11 @@ impl Database {
 
     pub fn vector_cache_bytes(&self) -> usize {
         self.vectors.cache_bytes()
+            + self
+                .dense_vectors
+                .as_ref()
+                .map(|cache| std::mem::size_of_val(cache.data.as_slice()))
+                .unwrap_or(0)
     }
 
     pub fn execute(&mut self, source: &str) -> Result<QueryResult, DbError> {
@@ -124,6 +135,7 @@ impl Database {
                 }
                 let schema = TableSchema::from_definitions(name.clone(), columns)?;
                 self.tables.insert(name, Table::new(schema.clone()));
+                self.dense_vectors = None;
                 self.pending_mutations
                     .push(storage::Mutation::CreateTable(schema));
                 Ok(QueryResult::default())
@@ -139,6 +151,7 @@ impl Database {
                         format!("table `{name}` does not exist"),
                     ));
                 };
+                self.dense_vectors = None;
                 self.pending_mutations
                     .push(storage::Mutation::DropTable(name));
                 Ok(QueryResult::default())
@@ -391,13 +404,7 @@ impl Database {
             return execute_constant_select(select);
         }
         let table_name = select.table.as_deref().expect("checked table source");
-        let (tables, vectors) = (&self.tables, &mut self.vectors);
-        let table = tables.get(table_name).ok_or_else(|| {
-            DbError::new(
-                ErrorCategory::TableNotFound,
-                format!("table `{table_name}` does not exist"),
-            )
-        })?;
+        let table = self.table(table_name)?;
         let mut columns = Vec::new();
         let mut projections = Vec::new();
         for expression in &select.projections {
@@ -510,26 +517,67 @@ impl Database {
                 None
             };
 
+        let dense_ready = if let Some((_, vector_index, _)) = &specialized_topk {
+            self.ensure_dense_vectors(table_name, *vector_index)?
+        } else {
+            false
+        };
+        let (tables, vectors, dense_vectors) =
+            (&self.tables, &mut self.vectors, self.dense_vectors.as_ref());
+        let table = tables.get(table_name).expect("table checked above");
+
         if let Some((limit, vector_index, query)) = specialized_topk {
             let mut topk = crate::vector::TopKAccumulator::new(limit);
-            for_each_matching_row(table, select.filter.as_ref(), |primary_key, row| {
-                let distance = match &row[vector_index] {
-                    Value::Vector(values) => crate::vector::l2_distance(values, &query)?,
-                    Value::VectorRef(handle) => vectors.l2_distance(*handle, &query)?,
-                    _ => {
-                        return Err(DbError::new(
-                            ErrorCategory::TypeMismatch,
-                            "expected VECTOR value",
-                        ));
+            if dense_ready {
+                let dense = dense_vectors.expect("dense cache was just built");
+                let allowed = table
+                    .equality_candidates(select.filter.as_ref())?
+                    .map(|keys| keys.into_iter().collect::<std::collections::HashSet<_>>());
+                for (row_index, primary_key) in dense.ids.iter().enumerate() {
+                    if allowed
+                        .as_ref()
+                        .is_some_and(|allowed| !allowed.contains(primary_key))
+                    {
+                        continue;
                     }
-                };
-                topk.push(distance, primary_key);
-                Ok(())
-            })?;
+                    if select.filter.is_some() {
+                        let row = &table.rows[primary_key];
+                        if !matches_filter(&table.schema, row, select.filter.as_ref())? {
+                            continue;
+                        }
+                    }
+                    let start = row_index * dense.dimensions;
+                    let distance = crate::vector::l2_distance(
+                        &dense.data[start..start + dense.dimensions],
+                        &query,
+                    )?;
+                    topk.push(distance, *primary_key);
+                }
+            } else {
+                for_each_matching_row(table, select.filter.as_ref(), |primary_key, row| {
+                    let distance = match &row[vector_index] {
+                        Value::Vector(values) => crate::vector::l2_distance(values, &query)?,
+                        Value::VectorRef(handle) => vectors.l2_distance(*handle, &query)?,
+                        _ => {
+                            return Err(DbError::new(
+                                ErrorCategory::TypeMismatch,
+                                "expected VECTOR value",
+                            ));
+                        }
+                    };
+                    topk.push(distance, primary_key);
+                    Ok(())
+                })?;
+            }
             let mut rows = Vec::with_capacity(limit.min(table.rows.len()));
-            for (_, primary_key) in topk.finish() {
+            for (distance, primary_key) in topk.finish() {
                 let row = &table.rows[&primary_key];
-                rows.push(project_row(row, &projections, vectors)?);
+                rows.push(project_row_with_ranked_distance(
+                    row,
+                    &projections,
+                    vectors,
+                    Some((vector_index, &query, distance)),
+                )?);
             }
             return Ok(QueryResult {
                 columns,
@@ -645,6 +693,72 @@ impl Database {
         self.persist_pending()
     }
 
+    fn ensure_dense_vectors(&mut self, table_name: &str, column: usize) -> Result<bool, DbError> {
+        let (generation, dimensions, row_count) = {
+            let table = self.table(table_name)?;
+            let dimensions = match table.schema.columns[column].column_type {
+                ColumnType::Vector(dimensions) => dimensions,
+                _ => {
+                    return Err(DbError::new(
+                        ErrorCategory::TypeMismatch,
+                        "dense vector cache requires a VECTOR column",
+                    ));
+                }
+            };
+            (table.generation(), dimensions, table.rows.len())
+        };
+        if self.dense_vectors.as_ref().is_some_and(|cache| {
+            cache.table == table_name && cache.column == column && cache.generation == generation
+        }) {
+            return Ok(true);
+        }
+        let bytes = row_count
+            .checked_mul(dimensions)
+            .and_then(|values| values.checked_mul(std::mem::size_of::<f32>()))
+            .ok_or_else(|| DbError::new(ErrorCategory::Range, "dense VECTOR cache overflow"))?;
+        if bytes > self.dense_cache_budget {
+            self.dense_vectors = None;
+            return Ok(false);
+        }
+
+        let (tables, vectors) = (&self.tables, &mut self.vectors);
+        let table = tables.get(table_name).ok_or_else(|| {
+            DbError::new(
+                ErrorCategory::TableNotFound,
+                format!("table `{table_name}` does not exist"),
+            )
+        })?;
+        let mut ids = Vec::with_capacity(row_count);
+        let mut data = Vec::with_capacity(row_count * dimensions);
+        let mut scratch = Vec::with_capacity(dimensions);
+        for (id, row) in &table.rows {
+            ids.push(*id);
+            match &row[column] {
+                Value::Vector(values) => data.extend_from_slice(values),
+                Value::VectorRef(handle) => {
+                    vectors.read_into(*handle, &mut scratch)?;
+                    data.extend_from_slice(&scratch);
+                }
+                _ => {
+                    return Err(DbError::new(
+                        ErrorCategory::TypeMismatch,
+                        "expected VECTOR value",
+                    ));
+                }
+            }
+        }
+        self.vectors.clear_value_cache();
+        self.dense_vectors = Some(DenseVectorCache {
+            table: table_name.to_owned(),
+            column,
+            generation,
+            dimensions,
+            ids,
+            data,
+        });
+        Ok(true)
+    }
+
     fn should_persist_after(&self, statement: &Statement) -> bool {
         let in_transaction = self.transaction_backup.is_some();
         match statement {
@@ -696,6 +810,15 @@ impl Database {
             })
             .collect()
     }
+}
+
+struct DenseVectorCache {
+    table: String,
+    column: usize,
+    generation: u64,
+    dimensions: usize,
+    ids: Vec<i64>,
+    data: Vec<f32>,
 }
 
 enum Projection {
@@ -838,6 +961,15 @@ fn project_row(
     projections: &[Projection],
     vectors: &mut VectorStore,
 ) -> Result<Row, DbError> {
+    project_row_with_ranked_distance(row, projections, vectors, None)
+}
+
+fn project_row_with_ranked_distance(
+    row: &Row,
+    projections: &[Projection],
+    vectors: &mut VectorStore,
+    ranked_distance: Option<(usize, &[f32], f64)>,
+) -> Result<Row, DbError> {
     let mut output = Vec::with_capacity(projections.len());
     for projection in projections {
         output.push(match projection {
@@ -846,10 +978,19 @@ fn project_row(
                 other => other.clone(),
             },
             Projection::Literal(value) => value.clone(),
-            Projection::L2Distance { index, query } => Value::Float(crate::vector::l2_distance(
-                &read_vector_value(vectors, &row[*index])?,
-                query,
-            )?),
+            Projection::L2Distance { index, query } => {
+                if let Some((ranked_index, ranked_query, distance)) = ranked_distance
+                    && ranked_index == *index
+                    && ranked_query == query.as_slice()
+                {
+                    Value::Float(distance)
+                } else {
+                    Value::Float(crate::vector::l2_distance(
+                        &read_vector_value(vectors, &row[*index])?,
+                        query,
+                    )?)
+                }
+            }
         });
     }
     Ok(output)

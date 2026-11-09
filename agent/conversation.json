@@ -119,7 +119,7 @@
       "kind": "persistent_benchmark",
       "command": "cargo test --release --test benchmark -- --ignored --nocapture",
       "status": "pass",
-      "output": "rows=10000 dimensions=128 queries=1000 recall=1.000000 write=7.2892644s query=1.5343781s cache_bytes=6151232",
+      "output": "rows=10000 dimensions=128 queries=1000 recall=1.000000 write=490.5584ms query=1.4929912s cache_bytes=5120000",
       "note": "Persistent WAL and page-store path on a Windows OneDrive directory."
     },
     {
@@ -128,6 +128,13 @@
       "command": "cargo test",
       "status": "pass",
       "output": "A deterministic 240-step insert/update/delete/transaction model passed across periodic restarts; direct L2 ordering, scalar index maintenance, mysql-test setup statements, and framed/TSV protocol tests passed."
+    },
+    {
+      "id": "E10",
+      "kind": "container_ci",
+      "command": "GitHub Actions MiniVectorDB run 42570310761",
+      "status": "pass",
+      "output": "The Ubuntu runner built the Dockerfile, ran the full Rust test suite in the Linux builder, started the container over stdin, and matched the expected ordered vector-query output."
     }
   ],
   "retrospective": {
@@ -156,6 +163,6 @@
   ],
   "evidence_attribution": {
     "student_contributions": ["/user_prompts/0/content", "/user_prompts/1/content", "/user_prompts/2/content", "/user_prompts/3/content", "/user_prompts/4/content"],
-    "agent_or_tool_only_results": ["/experiments/0/output", "/experiments/1/output", "/experiments/2/output", "/experiments/3/output", "/experiments/4/output", "/experiments/5/output", "/experiments/6/output", "/experiments/7/output", "/experiments/8/output"]
+    "agent_or_tool_only_results": ["/experiments/0/output", "/experiments/1/output", "/experiments/2/output", "/experiments/3/output", "/experiments/4/output", "/experiments/5/output", "/experiments/6/output", "/experiments/7/output", "/experiments/8/output", "/experiments/9/output"]
   }
 }

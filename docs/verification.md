@@ -22,13 +22,13 @@ cargo test --release --test benchmark -- --ignored --nocapture
 Result:
 
 ```text
-rows=10000 dimensions=128 queries=1000 recall=1.000000 write=7.2892644s query=1.5343781s cache_bytes=6151232
+rows=10000 dimensions=128 queries=1000 recall=1.000000 write=490.5584ms query=1.4929912s cache_bytes=5120000
 ```
 
 The benchmark uses an independent brute-force oracle for every query. The
 number is a local regression signal, not an official cgroup-based score.
-This run uses the persistent WAL/page-store path. The write time is dominated
-by 100 commit synchronizations on a Windows OneDrive directory and is not
+This run uses the persistent WAL/page-store path and batches each vector record
+into one file write. The numbers remain local regression signals and are not
 directly comparable with the Linux cgroup evaluation environment.
 
 ## Write-amplification check
@@ -69,8 +69,14 @@ two `database` rows in distance order, and restored all three rows after
 ## Pending verification
 
 - Official hidden MySQL-case pack and exact stdout protocol
-- Docker image build; a static `x86_64-unknown-linux-musl` release build does
-  succeed locally
 - Platform measurements for wall time, physical I/O, and cgroup peak memory
 - Bounded storage for extremely large scalar-row sets; vector payloads are
   already paged
+
+## Container verification
+
+GitHub Actions run
+[42570310761](https://github.com/BadFallen0110/seekdb/actions/runs/42570310761)
+successfully built the Dockerfile, ran the full Rust test suite inside the
+Linux build stage, started the resulting container with stdin only, and matched
+the expected SQL smoke output.

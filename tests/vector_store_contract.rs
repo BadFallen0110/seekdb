@@ -32,3 +32,20 @@ fn paged_store_round_trips_vectors_and_bounds_cache() {
     drop(store);
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn parsed_vector_cache_evicts_within_total_budget() {
+    let path = unique_file();
+    let mut store = VectorStore::open(&path, 2 * 1024 * 1024).unwrap();
+    let mut handles = Vec::new();
+    for value in 0..5_000 {
+        handles.push(store.append(&vec![value as f32; 128]).unwrap());
+    }
+    assert!(store.cache_bytes() <= 2 * 1024 * 1024);
+    let first = store.read(*handles.first().unwrap()).unwrap();
+    let last = store.read(*handles.last().unwrap()).unwrap();
+    assert_eq!(first[0], 0.0);
+    assert_eq!(last[0], 4_999.0);
+    drop(store);
+    std::fs::remove_file(path).unwrap();
+}

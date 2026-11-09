@@ -43,6 +43,14 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
             output_format = value.to_owned();
             continue;
         }
+        if let Some(value) = argument
+            .strip_prefix("--format=")
+            .or_else(|| argument.strip_prefix("--protocol="))
+            .or_else(|| argument.strip_prefix("--result-format="))
+        {
+            output_format = value.to_owned();
+            continue;
+        }
         if let Some(value) = argument.strip_prefix("--cache-bytes=") {
             cache_limit = Some(value.parse::<usize>()?);
             continue;
@@ -63,11 +71,14 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
             "--mode" => {
                 mode = Some(arguments.next().ok_or("--mode requires exact or ann")?);
             }
-            "--output" => {
+            "--output" | "--format" | "--protocol" | "--result-format" => {
                 output_format = arguments
                     .next()
                     .ok_or("--output requires a format argument")?;
             }
+            "--exact" => mode = Some("exact".to_owned()),
+            "--ann" => mode = Some("ann".to_owned()),
+            "--no-ready" => ready_marker.clear(),
             "--cache-bytes" => {
                 cache_limit = Some(
                     arguments
@@ -104,7 +115,7 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let output_format = match output_format.to_ascii_lowercase().as_str() {
         "framed" => OutputFormat::Framed,
-        "tsv" | "mysql-batch" => OutputFormat::Tsv,
+        "tsv" | "mysql-batch" | "mysql_batch" => OutputFormat::Tsv,
         "mysql" => OutputFormat::Mysql,
         _ => return Err("output format must be framed, tsv, or mysql".into()),
     };

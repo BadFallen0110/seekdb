@@ -452,9 +452,17 @@ fn apply_mode_hint(database: &mut Database, command: &str) -> Result<(), DbError
 
 fn apply_comment_mode_hint(database: &mut Database, statement: &str) {
     let lower = statement.to_ascii_lowercase();
-    if lower.contains("mode=ann") || lower.contains("mode: ann") {
+    if lower.contains("mode=ann")
+        || lower.contains("mode: ann")
+        || lower.contains("/*ann*/")
+        || lower.contains("/* ann */")
+    {
         database.set_query_mode(QueryMode::Ann);
-    } else if lower.contains("mode=exact") || lower.contains("mode: exact") {
+    } else if lower.contains("mode=exact")
+        || lower.contains("mode: exact")
+        || lower.contains("/*exact*/")
+        || lower.contains("/* exact */")
+    {
         database.set_query_mode(QueryMode::Exact);
     }
 }

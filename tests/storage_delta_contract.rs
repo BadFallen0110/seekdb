@@ -178,3 +178,28 @@ fn corrupt_vector_file_is_rebuilt_from_committed_wal() {
     assert_eq!(result.rows[0][0], Value::BigInt(1));
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn truncate_is_durable_across_reopen() {
+    let directory = unique_dir();
+    {
+        let mut database = Database::open(&directory).unwrap();
+        database
+            .execute("CREATE TABLE docs (id BIGINT PRIMARY KEY)")
+            .unwrap();
+        database
+            .execute("INSERT INTO docs VALUES (1),(2),(3)")
+            .unwrap();
+        database.execute("TRUNCATE TABLE docs").unwrap();
+        database.close().unwrap();
+    }
+    let mut reopened = Database::open(&directory).unwrap();
+    assert!(
+        reopened
+            .execute("SELECT * FROM docs")
+            .unwrap()
+            .rows
+            .is_empty()
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}

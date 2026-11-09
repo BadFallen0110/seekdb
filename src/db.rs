@@ -531,13 +531,9 @@ impl Database {
             let mut topk = crate::vector::TopKAccumulator::new(limit);
             if dense_ready {
                 let dense = dense_vectors.expect("dense cache was just built");
-                for (distance, primary_key) in dense_topk(
-                    dense,
-                    table,
-                    select.filter.as_ref(),
-                    &query,
-                    limit,
-                )? {
+                for (distance, primary_key) in
+                    dense_topk(dense, table, select.filter.as_ref(), &query, limit)?
+                {
                     topk.push(distance, primary_key);
                 }
             } else {
@@ -908,16 +904,7 @@ fn dense_topk(
             }
             let allowed = allowed.as_ref();
             handles.push(scope.spawn(move || {
-                scan_dense_range(
-                    dense,
-                    table,
-                    filter,
-                    allowed,
-                    query,
-                    limit,
-                    start,
-                    end,
-                )
+                scan_dense_range(dense, table, filter, allowed, query, limit, start, end)
             }));
         }
         handles

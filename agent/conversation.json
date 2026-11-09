@@ -132,9 +132,16 @@
     {
       "id": "E10",
       "kind": "container_ci",
-      "command": "GitHub Actions MiniVectorDB run 42570310761",
+      "command": "GitHub Actions MiniVectorDB run 42572376898",
       "status": "pass",
       "output": "The Ubuntu runner built the Dockerfile, ran the full Rust test suite in the Linux builder, started the container over stdin, and matched the expected ordered vector-query output."
+    },
+    {
+      "id": "E11",
+      "kind": "linux_benchmark_ci",
+      "command": "GitHub Actions MiniVectorDB build log, run 42572376898",
+      "status": "pass",
+      "output": "rows=10000 dimensions=128 queries=1000 recall=1.000000 write=411.244355ms query=2.419858564s cache_bytes=5120000"
     }
   ],
   "retrospective": {
@@ -163,6 +170,6 @@
   ],
   "evidence_attribution": {
     "student_contributions": ["/user_prompts/0/content", "/user_prompts/1/content", "/user_prompts/2/content", "/user_prompts/3/content", "/user_prompts/4/content"],
-    "agent_or_tool_only_results": ["/experiments/0/output", "/experiments/1/output", "/experiments/2/output", "/experiments/3/output", "/experiments/4/output", "/experiments/5/output", "/experiments/6/output", "/experiments/7/output", "/experiments/8/output", "/experiments/9/output"]
+    "agent_or_tool_only_results": ["/experiments/0/output", "/experiments/1/output", "/experiments/2/output", "/experiments/3/output", "/experiments/4/output", "/experiments/5/output", "/experiments/6/output", "/experiments/7/output", "/experiments/8/output", "/experiments/9/output", "/experiments/10/output"]
   }
 }

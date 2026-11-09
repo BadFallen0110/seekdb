@@ -735,6 +735,8 @@ impl Parser {
         };
         if !name.eq_ignore_ascii_case("MODE")
             && !name.eq_ignore_ascii_case("QUERY_MODE")
+            && !name.eq_ignore_ascii_case("SEARCH_MODE")
+            && !name.eq_ignore_ascii_case("VECTOR_MODE")
             && !name.eq_ignore_ascii_case("MINIVECTORDB_QUERY_MODE")
         {
             let harmless = [

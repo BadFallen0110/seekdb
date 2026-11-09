@@ -104,7 +104,7 @@ pub fn append_frame(path: &Path, payload: &[u8]) -> Result<(), DbError> {
     let existed = path.exists();
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     file.write_all(&encode_frames(&[payload.to_vec()]))?;
-    file.sync_all()?;
+    file.sync_data()?;
     if !existed {
         sync_parent(path)?;
     }

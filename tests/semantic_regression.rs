@@ -210,3 +210,18 @@ fn common_mysqltest_session_setup_is_supported() {
     let error = database.execute("SET autocommit=0").unwrap_err();
     assert_eq!(error.category(), ErrorCategory::Unsupported);
 }
+
+#[test]
+fn commit_or_rollback_without_transaction_is_an_error() {
+    let mut database = Database::memory();
+    assert_eq!(
+        database.execute("COMMIT").unwrap_err().category(),
+        ErrorCategory::Transaction
+    );
+    assert_eq!(
+        database.execute("ROLLBACK").unwrap_err().category(),
+        ErrorCategory::Transaction
+    );
+    database.execute("START TRANSACTION").unwrap();
+    database.execute("COMMIT WORK").unwrap();
+}

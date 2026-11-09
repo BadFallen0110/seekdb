@@ -189,6 +189,18 @@ fn order_by_can_use_l2_distance_without_projecting_it() {
 }
 
 #[test]
+fn duplicate_insert_column_names_are_rejected() {
+    let mut db = sample_db();
+    let error = db
+        .execute(
+            "INSERT INTO docs (id,id,category,content,embedding) \
+             VALUES (9,9,'db','x','[1,0]')",
+        )
+        .unwrap_err();
+    assert_eq!(error.category(), ErrorCategory::Syntax);
+}
+
+#[test]
 fn binary_accepts_multiple_semicolon_statements() {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)

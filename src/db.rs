@@ -243,6 +243,16 @@ impl Database {
     ) -> Result<QueryResult, DbError> {
         let schema = self.table(table_name)?.schema.clone();
         let prepared = if let Some(columns) = columns {
+            let unique_columns = columns
+                .iter()
+                .map(|column| column.to_ascii_lowercase())
+                .collect::<std::collections::BTreeSet<_>>();
+            if unique_columns.len() != columns.len() {
+                return Err(DbError::new(
+                    ErrorCategory::Syntax,
+                    "INSERT column list contains duplicate columns",
+                ));
+            }
             let indexes = columns
                 .iter()
                 .map(|column| schema.column_index(column))

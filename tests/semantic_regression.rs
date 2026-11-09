@@ -240,3 +240,60 @@ fn huge_limit_does_not_preallocate_from_the_requested_number() {
         .unwrap();
     assert_eq!(result.rows.len(), 2);
 }
+
+#[test]
+fn indexed_varchar_intersection_and_unfiltered_limit_are_exact() {
+    let mut database = database();
+    database
+        .execute(
+            "INSERT INTO docs VALUES \
+             (1,'x','a','[0,0]'),\
+             (2,'x','b','[0,0]'),\
+             (3,'y','a','[0,0]')",
+        )
+        .unwrap();
+    assert_eq!(
+        database
+            .execute("SELECT id FROM docs WHERE category='x' AND body='a'")
+            .unwrap()
+            .rows,
+        vec![vec![Value::BigInt(1)]]
+    );
+    assert_eq!(
+        database.execute("SELECT id FROM docs LIMIT 100").unwrap().rows,
+        vec![
+            vec![Value::BigInt(1)],
+            vec![Value::BigInt(2)],
+            vec![Value::BigInt(3)]
+        ]
+    );
+}
+
+#[test]
+fn failed_vector_update_and_bad_query_dimension_leave_data_unchanged() {
+    let mut database = database();
+    database
+        .execute("INSERT INTO docs VALUES (1,'x','a','[1,0]')")
+        .unwrap();
+    assert_eq!(
+        database
+            .execute("UPDATE docs SET embedding='[1]' WHERE id=1")
+            .unwrap_err()
+            .category(),
+        ErrorCategory::TypeMismatch
+    );
+    assert_eq!(
+        database
+            .execute("SELECT id, L2_DISTANCE(embedding,'[1]') AS d FROM docs")
+            .unwrap_err()
+            .category(),
+        ErrorCategory::TypeMismatch
+    );
+    assert_eq!(
+        database
+            .execute("SELECT id, L2_DISTANCE(embedding,'[1,0]') AS d FROM docs")
+            .unwrap()
+            .rows[0][0],
+        Value::BigInt(1)
+    );
+}

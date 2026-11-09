@@ -35,6 +35,8 @@ The process does not listen on a network port. Use `-i` rather than `-d` or
 | `--mode exact\|ann` | `exact` | Vector query mode |
 | `--output framed\|tsv\|mysql` | `framed` | Result framing format |
 | `--cache-bytes N` | 64 MiB | Vector page/value cache budget |
+| `--exact` / `--ann` | `--exact` | Shorthand for query mode |
+| `--no-ready` | off | Suppress the startup marker |
 
 Equivalent environment variables are `MINIVECTORDB_DATA_DIR`,
 `MINIVECTORDB_READY`, `MINIVECTORDB_QUERY_MODE`, and `MINIVECTORDB_OUTPUT`. A

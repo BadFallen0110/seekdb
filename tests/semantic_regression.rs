@@ -328,3 +328,26 @@ fn parallel_dense_topk_preserves_primary_key_tie_order() {
         (1..=10).map(Value::BigInt).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn bigint_boundaries_and_literal_overflow_are_handled() {
+    let mut database = database();
+    database
+        .execute(
+            "INSERT INTO docs VALUES \
+             (-9223372036854775808,'x','min','[0,0]'),\
+             (9223372036854775807,'x','max','[0,0]')",
+        )
+        .unwrap();
+    assert_eq!(
+        database
+            .execute("SELECT id FROM docs ORDER BY id")
+            .unwrap()
+            .rows,
+        vec![vec![Value::BigInt(i64::MIN)], vec![Value::BigInt(i64::MAX)]]
+    );
+    let error = database
+        .execute("INSERT INTO docs VALUES (9223372036854775808,'x','overflow','[0,0]')")
+        .unwrap_err();
+    assert_eq!(error.category(), ErrorCategory::Syntax);
+}

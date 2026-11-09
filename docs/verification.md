@@ -77,15 +77,17 @@ two `database` rows in distance order, and restored all three rows after
 ## Container verification
 
 GitHub Actions run
-[42572788687](https://github.com/BadFallen0110/seekdb/actions/runs/42572788687)
+[42573021031](https://github.com/BadFallen0110/seekdb/actions/runs/42573021031)
 successfully built the Dockerfile, ran the full Rust test suite inside the
 Linux build stage, started the resulting container with stdin only, and matched
 the expected SQL smoke output.
 
-The same Linux builder ran the persistent benchmark:
+Two successive Linux builder runs produced:
 
 ```text
 rows=10000 dimensions=128 queries=1000 recall=1.000000 write=785.733802ms query=1.329366971s cache_bytes=5120000
+rows=10000 dimensions=128 queries=1000 recall=1.000000 write=447.515141ms query=2.148253476s cache_bytes=5120000
 ```
 
-This is a shared hosted-runner measurement, not the official cgroup baseline.
+The spread shows shared-runner variance. These are not official cgroup baseline
+measurements; the competition's three-round median remains authoritative.

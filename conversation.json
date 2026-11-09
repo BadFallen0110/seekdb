@@ -132,16 +132,16 @@
     {
       "id": "E10",
       "kind": "container_ci",
-      "command": "GitHub Actions MiniVectorDB run 42572788687",
+      "command": "GitHub Actions MiniVectorDB run 42573021031",
       "status": "pass",
       "output": "The Ubuntu runner built the Dockerfile, ran the full Rust test suite in the Linux builder, started the container over stdin, and matched the expected ordered vector-query output."
     },
     {
       "id": "E11",
       "kind": "linux_benchmark_ci",
-      "command": "GitHub Actions MiniVectorDB build log, run 42572788687",
+      "command": "GitHub Actions MiniVectorDB build logs, runs 42572788687 and 42573021031",
       "status": "pass",
-      "output": "rows=10000 dimensions=128 queries=1000 recall=1.000000 write=785.733802ms query=1.329366971s cache_bytes=5120000"
+      "output": "Run 42572788687: write=785.733802ms query=1.329366971s. Run 42573021031: write=447.515141ms query=2.148253476s. Both used 10000 rows, 128 dimensions, 1000 queries, Recall=1.0."
     }
   ],
   "retrospective": {

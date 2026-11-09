@@ -22,3 +22,12 @@ fn vector_l2_uses_float32_values() {
     let rebuilt = f64::from(0.1_f32).powi(2) + 4.0;
     assert!((distance - rebuilt).abs() < 1e-12);
 }
+
+#[test]
+fn l2_keeps_large_finite_vectors_finite() {
+    let large = parse_vector("[3e38, 3e38]", 2).unwrap();
+    let zero = vec![0.0_f32; 2];
+    let distance = minivectordb::vector::l2_squared(&large, &zero).unwrap();
+    assert!(distance.is_finite());
+    assert!(distance > f64::from(f32::MAX));
+}

@@ -135,7 +135,11 @@ unsafe fn l2_squared_avx2(left: &[f32], right: &[f32]) -> f64 {
         sum += difference * difference;
         position += 1;
     }
-    sum
+    if sum.is_finite() {
+        sum
+    } else {
+        l2_squared_scalar(left, right)
+    }
 }
 
 #[derive(Debug)]

@@ -469,7 +469,9 @@ enum ScanState {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_statements;
+    use super::{OutputFormat, extract_statements, write_result};
+    use crate::db::QueryResult;
+    use crate::value::Value;
 
     #[test]
     fn statement_split_ignores_semicolons_in_strings_and_comments() {
@@ -480,5 +482,20 @@ mod tests {
         assert!(statements[0].contains("'a;b'"));
         assert!(statements[1].contains("SELECT 1"));
         assert_eq!(consumed, input.len());
+    }
+
+    #[test]
+    fn mysql_result_format_contains_borders_and_rows() {
+        let result = QueryResult {
+            columns: vec!["id".to_owned(), "body".to_owned()],
+            rows: vec![vec![Value::BigInt(1), Value::Varchar("hello".to_owned())]],
+            affected: 0,
+        };
+        let mut output = Vec::new();
+        write_result(&mut output, &result, OutputFormat::Mysql).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.starts_with('+'));
+        assert!(output.contains("| id"));
+        assert!(output.contains("| 1"));
     }
 }

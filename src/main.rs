@@ -20,8 +20,7 @@ fn main() -> ExitCode {
 fn run_main() -> Result<(), Box<dyn std::error::Error>> {
     let mut data_directory =
         PathBuf::from(env::var("MINIVECTORDDB_DATA_DIR").unwrap_or_else(|_| "/data".to_owned()));
-    let mut ready_marker =
-        env::var("MINIVECTORDDB_READY").unwrap_or_else(|_| "READY".to_owned());
+    let mut ready_marker = env::var("MINIVECTORDDB_READY").unwrap_or_else(|_| "READY".to_owned());
     let mut mode = env::var("MINIVECTORDDB_QUERY_MODE").ok();
 
     let mut arguments = env::args().skip(1);
@@ -40,11 +39,7 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
                     .ok_or("--ready requires a marker argument")?;
             }
             "--mode" => {
-                mode = Some(
-                    arguments
-                        .next()
-                        .ok_or("--mode requires exact or ann")?,
-                );
+                mode = Some(arguments.next().ok_or("--mode requires exact or ann")?);
             }
             "--output" => {
                 let _ = arguments

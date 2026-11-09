@@ -15,9 +15,7 @@ impl Value {
         if length > max_chars {
             return Err(DbError::new(
                 ErrorCategory::Range,
-                format!(
-                    "VARCHAR value has {length} characters, exceeding limit {max_chars}"
-                ),
+                format!("VARCHAR value has {length} characters, exceeding limit {max_chars}"),
             ));
         }
         Ok(Self::Varchar(value))
@@ -59,6 +57,13 @@ impl Value {
     pub fn as_vector(&self) -> Option<&[f32]> {
         match self {
             Self::Vector(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn as_float(&self) -> Option<f64> {
+        match self {
+            Self::Float(value) => Some(*value),
             _ => None,
         }
     }

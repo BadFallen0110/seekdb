@@ -15,10 +15,7 @@ pub struct TableSchema {
 }
 
 impl TableSchema {
-    pub fn from_definitions(
-        name: String,
-        columns: Vec<ColumnDefinition>,
-    ) -> Result<Self, DbError> {
+    pub fn from_definitions(name: String, columns: Vec<ColumnDefinition>) -> Result<Self, DbError> {
         if columns.is_empty() {
             return Err(DbError::new(
                 ErrorCategory::Syntax,
@@ -51,13 +48,13 @@ impl TableSchema {
                     ));
                 }
             }
-            if matches!(column.column_type, ColumnType::Vector(_)) {
-                if vector_index.replace(index).is_some() {
-                    return Err(DbError::new(
-                        ErrorCategory::Unsupported,
-                        "a table supports at most one VECTOR column",
-                    ));
-                }
+            if matches!(column.column_type, ColumnType::Vector(_))
+                && vector_index.replace(index).is_some()
+            {
+                return Err(DbError::new(
+                    ErrorCategory::Unsupported,
+                    "a table supports at most one VECTOR column",
+                ));
             }
         }
         let primary_key_index = primary_key.ok_or_else(|| {
@@ -106,20 +103,12 @@ impl TableSchema {
             .collect()
     }
 
-    pub fn decode_literal(
-        &self,
-        column_index: usize,
-        value: Literal,
-    ) -> Result<Value, DbError> {
+    pub fn decode_literal(&self, column_index: usize, value: Literal) -> Result<Value, DbError> {
         decode_literal(value, &self.columns[column_index].column_type, &self.name)
     }
 }
 
-fn decode_literal(
-    value: Literal,
-    column_type: &ColumnType,
-    table: &str,
-) -> Result<Value, DbError> {
+fn decode_literal(value: Literal, column_type: &ColumnType, table: &str) -> Result<Value, DbError> {
     match (value, column_type) {
         (Literal::BigInt(value), ColumnType::BigInt) => Ok(Value::BigInt(value)),
         (Literal::Varchar(value), ColumnType::Varchar(max_chars)) => {
@@ -130,9 +119,7 @@ fn decode_literal(
         }
         (_, expected) => Err(DbError::new(
             ErrorCategory::TypeMismatch,
-            format!(
-                "value does not match column type {expected:?} in table `{table}`"
-            ),
+            format!("value does not match column type {expected:?} in table `{table}`"),
         )),
     }
 }

@@ -4,11 +4,10 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{DbError, ErrorCategory};
 use crate::sql::{
-    Comparison, Expression, Literal, QueryMode, SelectExpression, SelectStatement, Statement,
-    parse,
+    Comparison, Expression, Literal, QueryMode, SelectExpression, SelectStatement, Statement, parse,
 };
-use crate::table::{Table, TableSchema};
 use crate::storage;
+use crate::table::{Table, TableSchema};
 use crate::value::{ColumnType, Row, Value};
 use crate::vector::parse_vector;
 
@@ -25,6 +24,7 @@ pub struct Database {
     query_mode: QueryMode,
     transaction_backup: Option<BTreeMap<String, Table>>,
     data_directory: Option<PathBuf>,
+    pending_mutations: Vec<storage::Mutation>,
 }
 
 impl Database {
@@ -34,6 +34,7 @@ impl Database {
             query_mode: QueryMode::Exact,
             transaction_backup: None,
             data_directory: None,
+            pending_mutations: Vec::new(),
         }
     }
 
@@ -41,15 +42,13 @@ impl Database {
         let data_directory = data_directory.as_ref().to_path_buf();
         storage::ensure_data_directory(&data_directory)?;
         let wal_path = data_directory.join("state.log");
-        let tables = match storage::read_last_frame(&wal_path)? {
-            Some(payload) => storage::decode_database(&payload)?,
-            None => BTreeMap::new(),
-        };
+        let tables = storage::load_database(&wal_path)?;
         Ok(Self {
             tables,
             query_mode: QueryMode::Exact,
             transaction_backup: None,
             data_directory: Some(data_directory),
+            pending_mutations: Vec::new(),
         })
     }
 
@@ -67,7 +66,7 @@ impl Database {
         let commit = matches!(&statement, Statement::Commit);
         let result = self.execute_statement(statement)?;
         if persist_after {
-            self.checkpoint()?;
+            self.persist_pending()?;
             if commit {
                 self.transaction_backup = None;
             }
@@ -86,7 +85,9 @@ impl Database {
                     ));
                 }
                 let schema = TableSchema::from_definitions(name.clone(), columns)?;
-                self.tables.insert(name, Table::new(schema));
+                self.tables.insert(name, Table::new(schema.clone()));
+                self.pending_mutations
+                    .push(storage::Mutation::CreateTable(schema));
                 Ok(QueryResult::default())
             }
             Statement::DropTable { name } => {
@@ -97,6 +98,8 @@ impl Database {
                         format!("table `{name}` does not exist"),
                     )
                 })?;
+                self.pending_mutations
+                    .push(storage::Mutation::DropTable(name));
                 Ok(QueryResult::default())
             }
             Statement::Insert {
@@ -128,7 +131,13 @@ impl Database {
                         format!("column `{column}` is not a VECTOR"),
                     ));
                 }
-                table.schema.vector_index_name = Some(name);
+                table.schema.vector_index_name = Some(name.clone());
+                let mutation = storage::Mutation::CreateVectorIndex {
+                    table: table.schema.name.clone(),
+                    name,
+                    column,
+                };
+                self.pending_mutations.push(mutation);
                 Ok(QueryResult::default())
             }
             Statement::Begin => {
@@ -152,6 +161,7 @@ impl Database {
                     DbError::new(ErrorCategory::Transaction, "no transaction is active")
                 })?;
                 self.tables = backup;
+                self.pending_mutations.clear();
                 Ok(QueryResult::default())
             }
             Statement::SetMode(mode) => {
@@ -203,7 +213,15 @@ impl Database {
                 .map(|row| table.schema.decode_row(row))
                 .collect::<Result<Vec<_>, _>>()?
         };
+        let mutation_rows = prepared
+            .iter()
+            .map(|row| (table.primary_key(row), row.clone()))
+            .collect::<Vec<_>>();
         let affected = table.insert_prepared(prepared)?;
+        self.pending_mutations.push(storage::Mutation::Upsert {
+            table: table_name.to_owned(),
+            rows: mutation_rows,
+        });
         Ok(QueryResult {
             affected,
             ..QueryResult::default()
@@ -247,6 +265,12 @@ impl Database {
         for (key, row) in &replacements {
             table.rows.insert(*key, row.clone());
         }
+        if !replacements.is_empty() {
+            self.pending_mutations.push(storage::Mutation::Upsert {
+                table: table_name.to_owned(),
+                rows: replacements.clone(),
+            });
+        }
         Ok(QueryResult {
             affected: replacements.len(),
             ..QueryResult::default()
@@ -267,6 +291,12 @@ impl Database {
         }
         for key in &keys {
             table.rows.remove(key);
+        }
+        if !keys.is_empty() {
+            self.pending_mutations.push(storage::Mutation::Delete {
+                table: table_name.to_owned(),
+                keys: keys.clone(),
+            });
         }
         Ok(QueryResult {
             affected: keys.len(),
@@ -307,7 +337,11 @@ impl Database {
                         }
                     };
                     let query = parse_vector(vector_literal, dimensions)?;
-                    columns.push(alias.clone().unwrap_or_else(|| format!("L2_DISTANCE({column})")));
+                    columns.push(
+                        alias
+                            .clone()
+                            .unwrap_or_else(|| format!("L2_DISTANCE({column})")),
+                    );
                     projections.push(Projection::L2Distance { index, query });
                 }
             }
@@ -337,20 +371,58 @@ impl Database {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
+        let specialized_topk =
+            if let ([order], Some(limit)) = (select.order_by.as_slice(), select.limit) {
+                if order.ascending {
+                    match order_indices[0] {
+                        OrderTarget::Projection(index) => match &projections[index] {
+                            Projection::L2Distance {
+                                index: vector_index,
+                                query,
+                            } => Some((limit, *vector_index, query.clone())),
+                            Projection::Column(_) => None,
+                        },
+                        OrderTarget::TableColumn(_) => None,
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+        if let Some((limit, vector_index, query)) = specialized_topk {
+            let mut topk = crate::vector::TopKAccumulator::new(limit);
+            for (primary_key, row) in &table.rows {
+                if !matches_filter(&table.schema, row, select.filter.as_ref())? {
+                    continue;
+                }
+                let distance = crate::vector::l2_distance(
+                    row[vector_index]
+                        .as_vector()
+                        .expect("validated VECTOR column"),
+                    &query,
+                )?;
+                topk.push(distance, *primary_key);
+            }
+            let mut rows = Vec::with_capacity(limit);
+            for (_, primary_key) in topk.finish() {
+                let row = &table.rows[&primary_key];
+                rows.push(project_row(row, &projections)?);
+            }
+            return Ok(QueryResult {
+                columns,
+                rows,
+                affected: 0,
+            });
+        }
+
         let mut candidates = Vec::new();
         for (primary_key, row) in &table.rows {
             if !matches_filter(&table.schema, row, select.filter.as_ref())? {
                 continue;
             }
-            let mut output = Vec::with_capacity(projections.len());
-            for projection in &projections {
-                output.push(match projection {
-                    Projection::Column(index) => row[*index].clone(),
-                    Projection::L2Distance { index, query } => Value::Float(
-                        crate::vector::l2_distance(row[*index].as_vector().unwrap(), query)?,
-                    ),
-                });
-            }
+            let output = project_row(row, &projections)?;
             let mut sort_values = Vec::with_capacity(order_indices.len());
             for target in &order_indices {
                 sort_values.push(match target {
@@ -452,8 +524,9 @@ impl Database {
     pub fn close(&mut self) -> Result<(), DbError> {
         if let Some(backup) = self.transaction_backup.take() {
             self.tables = backup;
+            self.pending_mutations.clear();
         }
-        self.checkpoint()
+        self.persist_pending()
     }
 
     fn should_persist_after(&self, statement: &Statement) -> bool {
@@ -471,6 +544,20 @@ impl Database {
             | Statement::Select(_)
             | Statement::SetMode(_) => false,
         }
+    }
+
+    fn persist_pending(&mut self) -> Result<(), DbError> {
+        if self.pending_mutations.is_empty() {
+            return Ok(());
+        }
+        let Some(directory) = &self.data_directory else {
+            self.pending_mutations.clear();
+            return Ok(());
+        };
+        let payload = storage::encode_mutations(&self.pending_mutations);
+        storage::append_frame(&directory.join("state.log"), &payload)?;
+        self.pending_mutations.clear();
+        Ok(())
     }
 }
 
@@ -557,4 +644,18 @@ fn compare_values(left: &Value, right: &Value) -> Ordering {
             .unwrap_or(Ordering::Equal),
         _ => Ordering::Equal,
     }
+}
+
+fn project_row(row: &Row, projections: &[Projection]) -> Result<Row, DbError> {
+    let mut output = Vec::with_capacity(projections.len());
+    for projection in projections {
+        output.push(match projection {
+            Projection::Column(index) => row[*index].clone(),
+            Projection::L2Distance { index, query } => Value::Float(crate::vector::l2_distance(
+                row[*index].as_vector().expect("validated VECTOR column"),
+                query,
+            )?),
+        });
+    }
+    Ok(output)
 }

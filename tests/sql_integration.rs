@@ -35,19 +35,14 @@ fn filtered_topk_filters_before_limit() {
              FROM docs WHERE category='db' ORDER BY d LIMIT 1",
         )
         .unwrap();
-    assert_eq!(
-        result.rows,
-        vec![vec![Value::BigInt(1), Value::Float(0.0)]]
-    );
+    assert_eq!(result.rows, vec![vec![Value::BigInt(1), Value::Float(0.0)]]);
 }
 
 #[test]
 fn select_star_and_comparisons_are_deterministic() {
     let mut db = sample_db();
     let result = db
-        .execute(
-            "SELECT * FROM docs WHERE id >= 2 AND category = 'db' ORDER BY id",
-        )
+        .execute("SELECT * FROM docs WHERE id >= 2 AND category = 'db' ORDER BY id")
         .unwrap();
     assert_eq!(result.rows.len(), 1);
     assert_eq!(result.rows[0][0], Value::BigInt(3));
@@ -60,9 +55,7 @@ fn update_and_delete_affect_existing_rows() {
         .execute("UPDATE docs SET content='新内容' WHERE category='db'")
         .unwrap();
     assert_eq!(updated.affected, 2);
-    let selected = db
-        .execute("SELECT content FROM docs WHERE id=1")
-        .unwrap();
+    let selected = db.execute("SELECT content FROM docs WHERE id=1").unwrap();
     assert_eq!(
         selected.rows,
         vec![vec![Value::Varchar("新内容".to_owned())]]
@@ -142,6 +135,22 @@ fn nested_begin_is_rejected_without_losing_the_active_transaction() {
 }
 
 #[test]
+fn vector_index_and_ann_mode_preserve_exact_topk_results() {
+    let mut db = sample_db();
+    db.execute("CREATE VECTOR INDEX docs_embedding ON docs(embedding)")
+        .unwrap();
+    db.execute("SET MODE='ann'").unwrap();
+    let result = db
+        .execute(
+            "SELECT id, L2_DISTANCE(embedding,'[1,0]') AS d \
+             FROM docs WHERE category='db' ORDER BY d LIMIT 2",
+        )
+        .unwrap();
+    assert_eq!(result.rows[0][0], Value::BigInt(1));
+    assert_eq!(result.rows[1][0], Value::BigInt(3));
+}
+
+#[test]
 fn binary_accepts_multiple_semicolon_statements() {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -152,12 +161,7 @@ fn binary_accepts_multiple_semicolon_statements() {
         std::process::id()
     ));
     let mut child = Command::new(env!("CARGO_BIN_EXE_minivectordb"))
-        .args([
-            "--data-dir",
-            data_dir.to_str().unwrap(),
-            "--ready",
-            "READY",
-        ])
+        .args(["--data-dir", data_dir.to_str().unwrap(), "--ready", "READY"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()

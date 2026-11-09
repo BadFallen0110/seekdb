@@ -121,7 +121,10 @@ struct Token {
 
 pub fn parse(source: &str) -> Result<Statement, DbError> {
     let tokens = lex(source)?;
-    let mut parser = Parser { tokens, position: 0 };
+    let mut parser = Parser {
+        tokens,
+        position: 0,
+    };
     let statement = parser.parse_statement()?;
     parser.consume_symbol(';');
     if !matches!(parser.peek().kind, TokenKind::End) {
@@ -391,9 +394,9 @@ impl Parser {
                         ColumnType::Vector(size)
                     }
                     _ => {
-                        return Err(self.unsupported(format!(
-                            "column type `{type_name}` is not supported"
-                        )));
+                        return Err(
+                            self.unsupported(format!("column type `{type_name}` is not supported"))
+                        );
                     }
                 };
                 let primary_key = if self.consume_keyword("PRIMARY") {

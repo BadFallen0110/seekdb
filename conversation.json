@@ -1,0 +1,127 @@
+{
+  "schema_version": "1",
+  "material_type": "real",
+  "synthetic": false,
+  "scope_note": "This file records the actual user prompts available in this development conversation and actual local experiment outputs. It does not attribute the Agent's design, code, or interpretations to the student.",
+  "user_prompts": [
+    {
+      "id": "U1",
+      "time": "2026-11-09",
+      "content": "加赛赛题 https://oceanbase.yuque.com/org-wiki-obtech-vh7w9r/hc3pio/lg8enxlmwg69unt6\n\n加赛算分规则 https://oceanbase.yuque.com/org-wiki-obtech-vh7w9r/hc3pio/dbf6uzmwsuupp7hn\n\n加赛实时榜单 https://zzstar101.github.io/oceanbase-live-board/playoff"
+    },
+    {
+      "id": "U2",
+      "time": "2026-11-09",
+      "content": "直接参赛实现"
+    },
+    {
+      "id": "U3",
+      "time": "2026-11-09",
+      "content": "按此实现"
+    },
+    {
+      "id": "U4",
+      "time": "2026-11-09",
+      "content": "结合这两个文件继续往下做"
+    }
+  ],
+  "conversations": [
+    {
+      "id": "C1",
+      "role": "user",
+      "content": "直接参赛实现",
+      "interpretation": "The student chose implementation over analysis-only work."
+    },
+    {
+      "id": "C2",
+      "role": "agent",
+      "content": "Proposed a Rust standard-library implementation with SQL parsing, checksummed WAL, transactions, exact TopK, and an isolated stdin/stdout adapter."
+    },
+    {
+      "id": "C3",
+      "role": "user",
+      "content": "按此实现",
+      "interpretation": "The student approved the recorded architecture."
+    },
+    {
+      "id": "C4",
+      "role": "user",
+      "content": "结合这两个文件继续往下做",
+      "interpretation": "The student supplied an analysis report and handoff, then asked to continue the implementation."
+    }
+  ],
+  "experiments": [
+    {
+      "id": "E1",
+      "kind": "functional_regression",
+      "command": "cargo test",
+      "status": "pass",
+      "output": "The local suite passed SQL parsing, value validation, CRUD, filtered TopK, transactions, WAL restart, forced-kill recovery, and TopK tie handling."
+    },
+    {
+      "id": "E2",
+      "kind": "benchmark_baseline",
+      "command": "cargo test --release --test benchmark -- --ignored --nocapture",
+      "status": "pass",
+      "output": "rows=10000 dimensions=128 queries=1000 recall=1.000000 write=219.5784ms query=3.2340265s",
+      "note": "Initial full-sort implementation."
+    },
+    {
+      "id": "E3",
+      "kind": "benchmark_optimized",
+      "command": "cargo test --release --test benchmark -- --ignored --nocapture",
+      "status": "pass",
+      "output": "rows=10000 dimensions=128 queries=1000 recall=1.000000 write=222.7979ms query=1.376657s",
+      "note": "Bounded TopK plus AVX2 and allocation reduction."
+    },
+    {
+      "id": "E4",
+      "kind": "storage_write_amplification",
+      "command": "cargo test --test storage_delta_contract many_small_commits_do_not_rewrite_the_whole_database -- --nocapture",
+      "status": "pass",
+      "output": "Before incremental WAL: incremental WAL grew to 14155264 bytes. After incremental WAL: incremental_wal_bytes=540175.",
+      "note": "Both values were observed on the same 1,000-row, 50-batch regression workload."
+    },
+    {
+      "id": "E5",
+      "kind": "forced_kill_recovery",
+      "command": "cargo test --test recovery -- --nocapture",
+      "status": "pass",
+      "output": "forced_kill_keeps_committed_and_drops_uncommitted_rows ... ok"
+    },
+    {
+      "id": "E6",
+      "kind": "official_sample_sql",
+      "command": "target/debug/minivectordb --data-dir <temporary-directory> --ready READY",
+      "status": "pass",
+      "output": "READY; affected rows 3; filtered result ids 1 and 2 with distances 0.141421374149721 and 1.272792188223375; transaction rollback restored ids 1, 2, and 3."
+    }
+  ],
+  "retrospective": {
+    "implemented": [
+      "SQL subset parser",
+      "BIGINT, Unicode VARCHAR, and finite float32 VECTOR validation",
+      "CRUD and filtered exact TopK",
+      "single explicit transaction with rollback",
+      "incremental checksummed WAL",
+      "normal restart and forced-kill recovery",
+      "framed stdin/stdout protocol",
+      "AVX2 L2 kernel with scalar fallback"
+    ],
+    "tradeoffs": [
+      "ANN initially reuses exact scan to protect Recall@10.",
+      "DDL is rejected inside explicit transactions to avoid undocumented implicit-commit behavior.",
+      "The protocol is isolated because the official driver was not published."
+    ]
+  },
+  "limitations": [
+    "Committed rows are still held in memory; a bounded on-disk page cache is not complete.",
+    "The official hidden MySQL cases, error codes, readiness marker, and result framing have not been available for conformance testing.",
+    "Dockerfile build and Linux container execution remain to be verified after Docker or the official platform is available.",
+    "The recorded user prompts show task selection and approval but do not by themselves prove technical understanding or independent result interpretation."
+  ],
+  "evidence_attribution": {
+    "student_contributions": ["/user_prompts/0/content", "/user_prompts/1/content", "/user_prompts/2/content", "/user_prompts/3/content"],
+    "agent_or_tool_only_results": ["/experiments/0/output", "/experiments/1/output", "/experiments/2/output", "/experiments/3/output", "/experiments/4/output", "/experiments/5/output"]
+  }
+}

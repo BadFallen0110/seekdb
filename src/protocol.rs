@@ -23,8 +23,10 @@ pub fn run<R: BufRead, W: Write>(
     mut writer: W,
     config: &ProtocolConfig,
 ) -> Result<(), DbError> {
-    writeln!(writer, "{}", config.ready_marker)?;
-    writer.flush()?;
+    if !config.ready_marker.is_empty() {
+        writeln!(writer, "{}", config.ready_marker)?;
+        writer.flush()?;
+    }
 
     let mut pending = String::new();
     for line in reader.lines() {
@@ -187,10 +189,7 @@ fn write_result(writer: &mut impl Write, result: &QueryResult) -> Result<(), DbE
             writeln!(
                 writer,
                 "ROW\t{}",
-                row.iter()
-                    .map(format_value)
-                    .collect::<Vec<_>>()
-                    .join("\t")
+                row.iter().map(format_value).collect::<Vec<_>>().join("\t")
             )?;
         }
         writeln!(writer, "END_RESULT")?;
@@ -271,16 +270,18 @@ fn error_code(category: ErrorCategory) -> u16 {
 
 fn is_exit_command(command: &str) -> bool {
     matches!(
-        command.trim().trim_end_matches(';').to_ascii_uppercase().as_str(),
+        command
+            .trim()
+            .trim_end_matches(';')
+            .to_ascii_uppercase()
+            .as_str(),
         "QUIT" | "EXIT" | "SHUTDOWN" | "\\Q"
     )
 }
 
 fn is_mode_hint(command: &str) -> bool {
     let lower = command.to_ascii_lowercase();
-    lower.starts_with("mode=")
-        || lower.starts_with("mode:")
-        || lower.starts_with("query_mode=")
+    lower.starts_with("mode=") || lower.starts_with("mode:") || lower.starts_with("query_mode=")
 }
 
 fn apply_mode_hint(database: &mut Database, command: &str) -> Result<(), DbError> {
@@ -313,4 +314,20 @@ enum ScanState {
     Backtick,
     LineComment,
     BlockComment,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_statements;
+
+    #[test]
+    fn statement_split_ignores_semicolons_in_strings_and_comments() {
+        let input =
+            "INSERT INTO t VALUES ('a;b'); -- ignored ; comment\n/* ignored ; block */ SELECT 1;";
+        let (statements, consumed) = extract_statements(input);
+        assert_eq!(statements.len(), 2);
+        assert!(statements[0].contains("'a;b'"));
+        assert!(statements[1].contains("SELECT 1"));
+        assert_eq!(consumed, input.len());
+    }
 }

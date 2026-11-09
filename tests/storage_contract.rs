@@ -26,12 +26,22 @@ fn truncated_tail_is_ignored() {
 }
 
 #[test]
+fn corruption_before_a_later_frame_is_fatal() {
+    let mut bytes = encode_frames(&[b"one".to_vec(), b"two".to_vec(), b"three".to_vec()]);
+    let second_payload = 12 + 3 + 12;
+    bytes[second_payload] ^= 0xff;
+    assert!(decode_frames(&bytes).is_err());
+}
+
+#[test]
 fn committed_database_state_survives_reopen() {
     let directory = unique_dir("reopen");
     {
         let mut database = Database::open(&directory).unwrap();
         database
-            .execute("CREATE TABLE docs (id BIGINT PRIMARY KEY, body VARCHAR(16), embedding VECTOR(2))")
+            .execute(
+                "CREATE TABLE docs (id BIGINT PRIMARY KEY, body VARCHAR(16), embedding VECTOR(2))",
+            )
             .unwrap();
         database
             .execute("INSERT INTO docs VALUES (1, '持久化', '[1,0]')")
@@ -54,12 +64,16 @@ fn uncommitted_transaction_does_not_survive_reopen() {
             .execute("CREATE TABLE docs (id BIGINT PRIMARY KEY)")
             .unwrap();
         database.execute("BEGIN").unwrap();
-        database
-            .execute("INSERT INTO docs VALUES (9)")
-            .unwrap();
+        database.execute("INSERT INTO docs VALUES (9)").unwrap();
     }
 
     let mut reopened = Database::open(&directory).unwrap();
-    assert!(reopened.execute("SELECT * FROM docs").unwrap().rows.is_empty());
+    assert!(
+        reopened
+            .execute("SELECT * FROM docs")
+            .unwrap()
+            .rows
+            .is_empty()
+    );
     fs::remove_dir_all(directory).unwrap();
 }

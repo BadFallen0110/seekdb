@@ -263,7 +263,10 @@ fn indexed_varchar_intersection_and_unfiltered_limit_are_exact() {
         vec![vec![Value::BigInt(1)]]
     );
     assert_eq!(
-        database.execute("SELECT id FROM docs LIMIT 100").unwrap().rows,
+        database
+            .execute("SELECT id FROM docs LIMIT 100")
+            .unwrap()
+            .rows,
         vec![
             vec![Value::BigInt(1)],
             vec![Value::BigInt(2)],

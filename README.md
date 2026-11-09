@@ -154,6 +154,8 @@ cargo test --release --test benchmark -- --ignored --nocapture
 
 The benchmark uses 10,000 rows, 128 dimensions, 1,000 TopK queries, K=10, and
 an independent brute-force oracle. It currently reports Recall@10 = 1.0.
+See `docs/design.md` for durable layout, transaction, recovery, and resource
+tradeoffs.
 
 ## Known limitations
 

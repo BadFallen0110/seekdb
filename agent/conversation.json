@@ -132,7 +132,7 @@
     {
       "id": "E10",
       "kind": "container_ci",
-      "command": "GitHub Actions MiniVectorDB run 42573021031",
+      "command": "GitHub Actions MiniVectorDB run 42573405545",
       "status": "pass",
       "output": "The Ubuntu runner built the Dockerfile, ran the full Rust test suite in the Linux builder, started the container over stdin, and matched the expected ordered vector-query output."
     },

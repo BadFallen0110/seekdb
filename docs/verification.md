@@ -77,7 +77,7 @@ two `database` rows in distance order, and restored all three rows after
 ## Container verification
 
 GitHub Actions run
-[42573021031](https://github.com/BadFallen0110/seekdb/actions/runs/42573021031)
+[42573405545](https://github.com/BadFallen0110/seekdb/actions/runs/42573405545)
 successfully built the Dockerfile, ran the full Rust test suite inside the
 Linux build stage, started the resulting container with stdin only, and matched
 the expected SQL smoke output.

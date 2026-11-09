@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use crate::error::{DbError, ErrorCategory};
 use crate::sql::{
@@ -7,6 +8,7 @@ use crate::sql::{
     parse,
 };
 use crate::table::{Table, TableSchema};
+use crate::storage;
 use crate::value::{ColumnType, Row, Value};
 use crate::vector::parse_vector;
 
@@ -19,9 +21,10 @@ pub struct QueryResult {
 
 #[derive(Clone, Debug)]
 pub struct Database {
-    tables: BTreeMap<String, Table>,
+    pub(crate) tables: BTreeMap<String, Table>,
     query_mode: QueryMode,
     transaction_backup: Option<BTreeMap<String, Table>>,
+    data_directory: Option<PathBuf>,
 }
 
 impl Database {
@@ -30,7 +33,24 @@ impl Database {
             tables: BTreeMap::new(),
             query_mode: QueryMode::Exact,
             transaction_backup: None,
+            data_directory: None,
         }
+    }
+
+    pub fn open(data_directory: impl AsRef<Path>) -> Result<Self, DbError> {
+        let data_directory = data_directory.as_ref().to_path_buf();
+        storage::ensure_data_directory(&data_directory)?;
+        let wal_path = data_directory.join("state.log");
+        let tables = match storage::read_last_frame(&wal_path)? {
+            Some(payload) => storage::decode_database(&payload)?,
+            None => BTreeMap::new(),
+        };
+        Ok(Self {
+            tables,
+            query_mode: QueryMode::Exact,
+            transaction_backup: None,
+            data_directory: Some(data_directory),
+        })
     }
 
     pub fn query_mode(&self) -> QueryMode {
@@ -43,7 +63,16 @@ impl Database {
 
     pub fn execute(&mut self, source: &str) -> Result<QueryResult, DbError> {
         let statement = parse(source)?;
-        self.execute_statement(statement)
+        let persist_after = self.should_persist_after(&statement);
+        let commit = matches!(&statement, Statement::Commit);
+        let result = self.execute_statement(statement)?;
+        if persist_after {
+            self.checkpoint()?;
+            if commit {
+                self.transaction_backup = None;
+            }
+        }
+        Ok(result)
     }
 
     fn execute_statement(&mut self, statement: Statement) -> Result<QueryResult, DbError> {
@@ -113,7 +142,7 @@ impl Database {
                 Ok(QueryResult::default())
             }
             Statement::Commit => {
-                self.transaction_backup.take().ok_or_else(|| {
+                self.transaction_backup.as_ref().ok_or_else(|| {
                     DbError::new(ErrorCategory::Transaction, "no transaction is active")
                 })?;
                 Ok(QueryResult::default())
@@ -410,6 +439,38 @@ impl Database {
             ));
         }
         Ok(())
+    }
+
+    pub fn checkpoint(&self) -> Result<(), DbError> {
+        let Some(directory) = &self.data_directory else {
+            return Ok(());
+        };
+        let payload = storage::encode_database(&self.tables);
+        storage::append_frame(&directory.join("state.log"), &payload)
+    }
+
+    pub fn close(&mut self) -> Result<(), DbError> {
+        if let Some(backup) = self.transaction_backup.take() {
+            self.tables = backup;
+        }
+        self.checkpoint()
+    }
+
+    fn should_persist_after(&self, statement: &Statement) -> bool {
+        let in_transaction = self.transaction_backup.is_some();
+        match statement {
+            Statement::Insert { .. }
+            | Statement::Update { .. }
+            | Statement::Delete { .. }
+            | Statement::CreateTable { .. }
+            | Statement::DropTable { .. }
+            | Statement::CreateVectorIndex { .. } => !in_transaction,
+            Statement::Commit => in_transaction,
+            Statement::Begin
+            | Statement::Rollback
+            | Statement::Select(_)
+            | Statement::SetMode(_) => false,
+        }
     }
 }
 

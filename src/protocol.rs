@@ -21,7 +21,7 @@ impl Default for ProtocolConfig {
     fn default() -> Self {
         Self {
             ready_marker: "READY".to_owned(),
-            output_format: OutputFormat::Framed,
+            output_format: OutputFormat::Tsv,
         }
     }
 }

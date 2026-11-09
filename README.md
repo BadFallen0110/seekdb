@@ -33,7 +33,7 @@ The process does not listen on a network port. Use `-i` rather than `-d` or
 | `--data-dir PATH` | `/data` | Durable data directory |
 | `--ready TEXT` | `READY` | Startup marker written to stdout |
 | `--mode exact\|ann` | `exact` | Vector query mode |
-| `--output framed\|tsv\|mysql` | `framed` | Result framing format |
+| `--output framed\|tsv\|mysql` | `tsv` | Result framing format |
 | `--cache-bytes N` | 64 MiB | Vector page/value cache budget |
 | `--exact` / `--ann` | `--exact` | Shorthand for query mode |
 | `--no-ready` | off | Suppress the startup marker |
@@ -121,7 +121,7 @@ rebuildable page store derived from committed WAL records.
 
 ## Protocol
 
-The default framed adapter emits:
+The explicit framed adapter (`--output framed`) emits:
 
 ```text
 READY
@@ -134,7 +134,7 @@ OK
 ERROR	1201	TYPE_MISMATCH	mismatched type
 ```
 
-`--output tsv` emits a header row and tab-separated rows suitable for
+Default `--output tsv` emits a header row and tab-separated rows suitable for
 mysql-batch-style parsing. `--output mysql` emits an ASCII table and
 `Query OK` statuses. Input accepts semicolon boundaries plus single-line SQL
 without a trailing semicolon.

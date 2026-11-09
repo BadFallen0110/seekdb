@@ -18,7 +18,7 @@ target, not a claim of official conformance.
 
 ## Current output
 
-Three selectable formats are available as `framed` (default), `tsv`, and
+Three selectable formats are available as `tsv` (default), `framed`, and
 `mysql`.
 
 - Startup: one configurable ready line, default `READY`; an empty argument

@@ -31,7 +31,7 @@ jobs:
               "INSERT INTO docs VALUES (2,'second','[0,1]'),(1,'first','[1,0]');" \
               "SELECT id, body, L2_DISTANCE(embedding,'[1,0]') AS d FROM docs ORDER BY d LIMIT 2;" \
               "QUIT;" |
-              docker run --rm -i --cpus=2 --memory=2g minivectordb:ci
+              docker run --rm -i --cpus=2 --memory=2g minivectordb:ci --output framed
           )"
           printf '%s\n' "$output"
           grep -F "ROW	1	first	0" <<<"$output"

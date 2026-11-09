@@ -22,7 +22,7 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
         PathBuf::from(env::var("MINIVECTORDB_DATA_DIR").unwrap_or_else(|_| "/data".to_owned()));
     let mut ready_marker = env::var("MINIVECTORDB_READY").unwrap_or_else(|_| "READY".to_owned());
     let mut mode = env::var("MINIVECTORDB_QUERY_MODE").ok();
-    let mut output_format = env::var("MINIVECTORDB_OUTPUT").unwrap_or_else(|_| "framed".to_owned());
+    let mut output_format = env::var("MINIVECTORDB_OUTPUT").unwrap_or_else(|_| "tsv".to_owned());
     let mut cache_limit = None;
 
     let mut arguments = env::args().skip(1);

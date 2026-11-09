@@ -721,6 +721,12 @@ impl Parser {
             }
             return Ok(Statement::Noop);
         }
+        if name.eq_ignore_ascii_case("TRANSACTION") {
+            while !matches!(self.peek().kind, TokenKind::End) && !self.peek_symbol(';') {
+                self.next();
+            }
+            return Ok(Statement::Noop);
+        }
         self.expect_symbol('=')?;
         let value = match self.next().kind {
             TokenKind::String(value) | TokenKind::Identifier(value) => value,
@@ -739,6 +745,8 @@ impl Parser {
                 "CHARACTER_SET_RESULTS",
                 "COLLATION_CONNECTION",
                 "SQL_SAFE_UPDATES",
+                "TX_ISOLATION",
+                "SQL_LOG_BIN",
             ]
             .iter()
             .any(|variable| name.eq_ignore_ascii_case(variable));

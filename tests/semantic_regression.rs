@@ -205,6 +205,9 @@ fn common_mysqltest_session_setup_is_supported() {
     database.execute("SET NAMES utf8mb4").unwrap();
     database.execute("SET @@session.sql_mode=''").unwrap();
     database.execute("SET SESSION time_zone='+00:00'").unwrap();
+    database
+        .execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        .unwrap();
     database.execute("SET autocommit=1").unwrap();
     database.execute("USE test").unwrap();
     let error = database.execute("SET autocommit=0").unwrap_err();

@@ -1,6 +1,9 @@
 use minivectordb::db::Database;
 use minivectordb::error::ErrorCategory;
 use minivectordb::value::Value;
+use std::io::Write;
+use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn sample_db() -> Database {
     let mut db = Database::memory();
@@ -136,4 +139,44 @@ fn nested_begin_is_rejected_without_losing_the_active_transaction() {
     assert_eq!(db.execute("SELECT * FROM docs").unwrap().rows.len(), 2);
     db.execute("ROLLBACK").unwrap();
     assert_eq!(db.execute("SELECT * FROM docs").unwrap().rows.len(), 3);
+}
+
+#[test]
+fn binary_accepts_multiple_semicolon_statements() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let data_dir = std::env::temp_dir().join(format!(
+        "minivectordb-protocol-{}-{nonce}",
+        std::process::id()
+    ));
+    let mut child = Command::new(env!("CARGO_BIN_EXE_minivectordb"))
+        .args([
+            "--data-dir",
+            data_dir.to_str().unwrap(),
+            "--ready",
+            "READY",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            b"CREATE TABLE t (id BIGINT PRIMARY KEY);\n\
+              INSERT INTO t VALUES (1);\n\
+              SELECT * FROM t;\n\
+              QUIT;\n",
+        )
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success());
+    assert!(stdout.contains("AFFECTED\t1"));
+    assert!(stdout.contains("ROW\t1"));
+    std::fs::remove_dir_all(data_dir).unwrap();
 }

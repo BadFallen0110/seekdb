@@ -41,7 +41,7 @@ impl Database {
     }
 
     pub fn open(data_directory: impl AsRef<Path>) -> Result<Self, DbError> {
-        let cache_limit = std::env::var("MINIVECTORDDB_CACHE_BYTES")
+        let cache_limit = std::env::var("MINIVECTORDB_CACHE_BYTES")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(64 * 1024 * 1024);
@@ -299,15 +299,7 @@ impl Database {
             changes.push((index, schema.decode_literal(index, literal)?));
         }
 
-        let mut keys = Vec::new();
-        {
-            let table = self.table(table_name)?;
-            for (key, row) in &table.rows {
-                if matches_filter(&table.schema, row, filter.as_ref())? {
-                    keys.push(*key);
-                }
-            }
-        }
+        let keys = matching_keys(self.table(table_name)?, filter.as_ref())?;
 
         let mut replacements = Vec::with_capacity(keys.len());
         let mut persisted_replacements = Vec::with_capacity(keys.len());
@@ -323,7 +315,7 @@ impl Database {
         {
             let table = self.table_mut(table_name)?;
             for (key, row) in &replacements {
-                table.rows.insert(*key, row.clone());
+                table.replace_row(*key, row.clone());
             }
         }
         if !replacements.is_empty() {
@@ -343,13 +335,8 @@ impl Database {
         table_name: &str,
         filter: Option<Expression>,
     ) -> Result<QueryResult, DbError> {
+        let keys = matching_keys(self.table(table_name)?, filter.as_ref())?;
         let table = self.table_mut(table_name)?;
-        let mut keys = Vec::new();
-        for (key, row) in &table.rows {
-            if matches_filter(&table.schema, row, filter.as_ref())? {
-                keys.push(*key);
-            }
-        }
         for key in &keys {
             table.rows.remove(key);
         }
@@ -469,10 +456,7 @@ impl Database {
 
         if let Some((limit, vector_index, query)) = specialized_topk {
             let mut topk = crate::vector::TopKAccumulator::new(limit);
-            for (primary_key, row) in &table.rows {
-                if !matches_filter(&table.schema, row, select.filter.as_ref())? {
-                    continue;
-                }
+            for_each_matching_row(table, select.filter.as_ref(), |primary_key, row| {
                 let distance = match &row[vector_index] {
                     Value::Vector(values) => crate::vector::l2_distance(values, &query)?,
                     Value::VectorRef(handle) => vectors.l2_distance(*handle, &query)?,
@@ -483,8 +467,9 @@ impl Database {
                         ));
                     }
                 };
-                topk.push(distance, *primary_key);
-            }
+                topk.push(distance, primary_key);
+                Ok(())
+            })?;
             let mut rows = Vec::with_capacity(limit);
             for (_, primary_key) in topk.finish() {
                 let row = &table.rows[&primary_key];
@@ -498,10 +483,7 @@ impl Database {
         }
 
         let mut candidates = Vec::new();
-        for (primary_key, row) in &table.rows {
-            if !matches_filter(&table.schema, row, select.filter.as_ref())? {
-                continue;
-            }
+        for_each_matching_row(table, select.filter.as_ref(), |primary_key, row| {
             let output = project_row(row, &projections, vectors)?;
             let mut sort_values = Vec::with_capacity(order_indices.len());
             for target in &order_indices {
@@ -511,11 +493,12 @@ impl Database {
                 });
             }
             candidates.push(Candidate {
-                primary_key: *primary_key,
+                primary_key,
                 output,
                 sort_values,
             });
-        }
+            Ok(())
+        })?;
 
         if !select.order_by.is_empty() {
             candidates.sort_by(|left, right| {
@@ -666,6 +649,50 @@ struct Candidate {
     primary_key: i64,
     output: Row,
     sort_values: Row,
+}
+
+fn matching_keys(table: &Table, filter: Option<&Expression>) -> Result<Vec<i64>, DbError> {
+    let mut keys = Vec::new();
+    if let Some(candidates) = table.equality_candidates(filter)? {
+        for key in candidates {
+            if let Some(row) = table.rows.get(&key) {
+                if matches_filter(&table.schema, row, filter)? {
+                    keys.push(key);
+                }
+            }
+        }
+    } else {
+        for (key, row) in &table.rows {
+            if matches_filter(&table.schema, row, filter)? {
+                keys.push(*key);
+            }
+        }
+    }
+    Ok(keys)
+}
+
+fn for_each_matching_row(
+    table: &Table,
+    filter: Option<&Expression>,
+    mut callback: impl FnMut(i64, &Row) -> Result<(), DbError>,
+) -> Result<(), DbError> {
+    if let Some(candidates) = table.equality_candidates(filter)? {
+        for key in candidates {
+            let Some(row) = table.rows.get(&key) else {
+                continue;
+            };
+            if matches_filter(&table.schema, row, filter)? {
+                callback(key, row)?;
+            }
+        }
+    } else {
+        for (key, row) in &table.rows {
+            if matches_filter(&table.schema, row, filter)? {
+                callback(*key, row)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn matches_filter(

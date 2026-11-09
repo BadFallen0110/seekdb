@@ -101,10 +101,13 @@ pub fn read_all_frames(path: &Path) -> Result<Vec<Vec<u8>>, DbError> {
 }
 
 pub fn append_frame(path: &Path, payload: &[u8]) -> Result<(), DbError> {
+    let existed = path.exists();
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     file.write_all(&encode_frames(&[payload.to_vec()]))?;
     file.sync_all()?;
-    sync_parent(path)?;
+    if !existed {
+        sync_parent(path)?;
+    }
     Ok(())
 }
 
@@ -167,7 +170,7 @@ pub fn decode_database(bytes: &[u8]) -> Result<BTreeMap<String, Table>, DbError>
             }
             rows.insert(key, row);
         }
-        tables.insert(name, Table { schema, rows });
+        tables.insert(name, Table::from_rows(schema, rows));
     }
     if cursor.position != cursor.bytes.len() {
         return Err(corruption("trailing bytes in database snapshot"));
@@ -301,7 +304,7 @@ pub fn apply_mutations(
                     )
                 })?;
                 for (key, row) in rows {
-                    table.rows.insert(*key, materialize_row(row, vectors)?);
+                    table.replace_row(*key, materialize_row(row, vectors)?);
                 }
             }
             Mutation::Delete { table, keys } => {
@@ -312,7 +315,7 @@ pub fn apply_mutations(
                     )
                 })?;
                 for key in keys {
-                    table.rows.remove(key);
+                    table.remove_row(*key);
                 }
             }
             Mutation::CreateVectorIndex {
@@ -349,13 +352,7 @@ pub fn load_database(
                     .into_iter()
                     .map(|(key, row)| Ok((key, materialize_row(&row, vectors)?)))
                     .collect::<Result<_, DbError>>()?;
-                tables.insert(
-                    name,
-                    Table {
-                        schema: table.schema,
-                        rows,
-                    },
-                );
+                tables.insert(name, Table::from_rows(table.schema, rows));
             }
         } else if frame.starts_with(b"MvOP") {
             let mutations = decode_mutations(&frame)?;

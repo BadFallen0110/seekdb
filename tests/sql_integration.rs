@@ -151,6 +151,32 @@ fn vector_index_and_ann_mode_preserve_exact_topk_results() {
 }
 
 #[test]
+fn scalar_equality_index_tracks_category_updates_and_deletes() {
+    let mut db = sample_db();
+    db.execute("UPDATE docs SET category='travel' WHERE id=1")
+        .unwrap();
+    assert_eq!(
+        db.execute("SELECT id FROM docs WHERE category='db'")
+            .unwrap()
+            .rows,
+        vec![vec![Value::BigInt(3)]]
+    );
+    assert_eq!(
+        db.execute("SELECT id FROM docs WHERE category='travel' ORDER BY id")
+            .unwrap()
+            .rows,
+        vec![vec![Value::BigInt(1)], vec![Value::BigInt(2)]]
+    );
+    db.execute("DELETE FROM docs WHERE id=1").unwrap();
+    assert_eq!(
+        db.execute("SELECT id FROM docs WHERE category='travel'")
+            .unwrap()
+            .rows,
+        vec![vec![Value::BigInt(2)]]
+    );
+}
+
+#[test]
 fn binary_accepts_multiple_semicolon_statements() {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -210,7 +236,7 @@ fn binary_can_emit_mysql_batch_style_tsv() {
         .stdin
         .take()
         .unwrap()
-        .write_all(b"SELECT 1 AS value;\nQUIT;\n")
+        .write_all(b"SELECT 1 AS value\nQUIT\n")
         .unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success());

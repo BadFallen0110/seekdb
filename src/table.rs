@@ -1,7 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{BTreeMap, HashMap};
+use std::hash::{Hash, Hasher};
 
 use crate::error::{DbError, ErrorCategory};
-use crate::sql::{ColumnDefinition, Literal};
+use crate::sql::{ColumnDefinition, Comparison, Expression, Literal};
 use crate::value::{ColumnType, Row, Value};
 use crate::vector::parse_vector;
 
@@ -128,14 +130,29 @@ fn decode_literal(value: Literal, column_type: &ColumnType, table: &str) -> Resu
 pub struct Table {
     pub schema: TableSchema,
     pub rows: BTreeMap<i64, Row>,
+    equality_index: Vec<HashMap<u64, Vec<i64>>>,
 }
 
 impl Table {
     pub fn new(schema: TableSchema) -> Self {
         Self {
+            equality_index: (0..schema.columns.len()).map(|_| HashMap::new()).collect(),
             schema,
             rows: BTreeMap::new(),
         }
+    }
+
+    pub(crate) fn from_rows(schema: TableSchema, rows: BTreeMap<i64, Row>) -> Self {
+        let mut table = Self {
+            equality_index: (0..schema.columns.len()).map(|_| HashMap::new()).collect(),
+            schema,
+            rows: BTreeMap::new(),
+        };
+        for (key, row) in rows {
+            table.index_row(key, &row);
+            table.rows.insert(key, row);
+        }
+        table
     }
 
     pub fn primary_key(&self, row: &Row) -> i64 {
@@ -154,7 +171,126 @@ impl Table {
             pending.insert(key, row);
         }
         let affected = pending.len();
+        for (key, row) in &pending {
+            self.index_row(*key, row);
+        }
         self.rows.extend(pending);
         Ok(affected)
     }
+
+    pub fn replace_row(&mut self, key: i64, row: Row) {
+        if let Some(previous) = self.rows.remove(&key) {
+            self.unindex_row(key, &previous);
+        }
+        self.index_row(key, &row);
+        self.rows.insert(key, row);
+    }
+
+    pub fn remove_row(&mut self, key: i64) -> Option<Row> {
+        let row = self.rows.remove(&key)?;
+        self.unindex_row(key, &row);
+        Some(row)
+    }
+
+    pub fn equality_candidates(
+        &self,
+        filter: Option<&Expression>,
+    ) -> Result<Option<Vec<i64>>, DbError> {
+        let Some(filter) = filter else {
+            return Ok(None);
+        };
+        match filter {
+            Expression::Compare {
+                left,
+                operator: Comparison::Equal,
+                right,
+            } => {
+                let index = self.schema.column_index(left)?;
+                if index == self.schema.primary_key_index {
+                    let key = match self.schema.decode_literal(index, right.clone())? {
+                        Value::BigInt(key) => key,
+                        _ => unreachable!("primary key is BIGINT"),
+                    };
+                    return Ok(Some(
+                        self.rows
+                            .contains_key(&key)
+                            .then_some(key)
+                            .into_iter()
+                            .collect(),
+                    ));
+                }
+                if !matches!(
+                    self.schema.columns[index].column_type,
+                    ColumnType::Varchar(_)
+                ) {
+                    return Ok(None);
+                }
+                let hash = match self.schema.decode_literal(index, right.clone())? {
+                    Value::Varchar(value) => hash_text(&value),
+                    _ => return Ok(None),
+                };
+                Ok(Some(
+                    self.equality_index[index]
+                        .get(&hash)
+                        .cloned()
+                        .unwrap_or_default(),
+                ))
+            }
+            Expression::And(left, right) => {
+                let left = self.equality_candidates(Some(left))?;
+                let right = self.equality_candidates(Some(right))?;
+                match (left, right) {
+                    (Some(left), Some(right)) => {
+                        let right = right.into_iter().collect::<std::collections::HashSet<_>>();
+                        Ok(Some(
+                            left.into_iter().filter(|key| right.contains(key)).collect(),
+                        ))
+                    }
+                    (Some(keys), None) | (None, Some(keys)) => Ok(Some(keys)),
+                    (None, None) => Ok(None),
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn index_row(&mut self, key: i64, row: &Row) {
+        for (index, column) in self.schema.columns.iter().enumerate() {
+            if matches!(column.column_type, ColumnType::Varchar(_)) {
+                if let Some(text) = row[index].as_varchar() {
+                    self.equality_index[index]
+                        .entry(hash_text(text))
+                        .or_default()
+                        .push(key);
+                }
+            }
+        }
+    }
+
+    fn unindex_row(&mut self, key: i64, row: &Row) {
+        for (index, column) in self.schema.columns.iter().enumerate() {
+            if matches!(column.column_type, ColumnType::Varchar(_)) {
+                if let Some(text) = row[index].as_varchar() {
+                    let hash = hash_text(text);
+                    let mut remove_bucket = false;
+                    if let Some(keys) = self.equality_index[index].get_mut(&hash) {
+                        if let Some(position) = keys.iter().position(|candidate| *candidate == key)
+                        {
+                            keys.swap_remove(position);
+                        }
+                        remove_bucket = keys.is_empty();
+                    }
+                    if remove_bucket {
+                        self.equality_index[index].remove(&hash);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn hash_text(value: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
 }

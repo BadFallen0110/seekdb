@@ -640,7 +640,7 @@ impl Parser {
         let value = self.expect_string()?;
         if !name.eq_ignore_ascii_case("MODE")
             && !name.eq_ignore_ascii_case("QUERY_MODE")
-            && !name.eq_ignore_ascii_case("MINIVECTORDDB_QUERY_MODE")
+            && !name.eq_ignore_ascii_case("MINIVECTORDB_QUERY_MODE")
         {
             return Err(self.unsupported(format!("SET variable `{name}` is not supported")));
         }

@@ -36,13 +36,13 @@ The process does not listen on a network port. Use `-i` rather than `-d` or
 | `--output framed\|tsv\|mysql` | `framed` | Result framing format |
 | `--cache-bytes N` | 64 MiB | Vector page/value cache budget |
 
-Equivalent environment variables are `MINIVECTORDDB_DATA_DIR`,
-`MINIVECTORDDB_READY`, and `MINIVECTORDDB_QUERY_MODE`. A SQL comment containing
+Equivalent environment variables are `MINIVECTORDB_DATA_DIR`,
+`MINIVECTORDB_READY`, and `MINIVECTORDB_QUERY_MODE`. A SQL comment containing
 `mode=ann` or `mode=exact` overrides the query mode for subsequent statements.
 In the first implementation, `ann` deliberately uses exact scanning so its
 Recall@10 remains 1.0.
 
-`MINIVECTORDDB_CACHE_BYTES` controls the vector page/value cache budget. Its
+`MINIVECTORDB_CACHE_BYTES` controls the vector page/value cache budget. Its
 default is 64 MiB. Vector payloads use 64 KiB pages and a bounded LRU cache;
 rows retain only compact vector handles.
 

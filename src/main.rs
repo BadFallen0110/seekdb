@@ -19,11 +19,10 @@ fn main() -> ExitCode {
 
 fn run_main() -> Result<(), Box<dyn std::error::Error>> {
     let mut data_directory =
-        PathBuf::from(env::var("MINIVECTORDDB_DATA_DIR").unwrap_or_else(|_| "/data".to_owned()));
-    let mut ready_marker = env::var("MINIVECTORDDB_READY").unwrap_or_else(|_| "READY".to_owned());
-    let mut mode = env::var("MINIVECTORDDB_QUERY_MODE").ok();
-    let mut output_format =
-        env::var("MINIVECTORDDB_OUTPUT").unwrap_or_else(|_| "framed".to_owned());
+        PathBuf::from(env::var("MINIVECTORDB_DATA_DIR").unwrap_or_else(|_| "/data".to_owned()));
+    let mut ready_marker = env::var("MINIVECTORDB_READY").unwrap_or_else(|_| "READY".to_owned());
+    let mut mode = env::var("MINIVECTORDB_QUERY_MODE").ok();
+    let mut output_format = env::var("MINIVECTORDB_OUTPUT").unwrap_or_else(|_| "framed".to_owned());
     let mut cache_limit = None;
 
     let mut arguments = env::args().skip(1);

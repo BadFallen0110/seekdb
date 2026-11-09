@@ -6,7 +6,9 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY tests ./tests
 
-RUN cargo test --locked && cargo build --release --locked
+RUN cargo test --locked \
+    && cargo test --release --locked --test benchmark -- --ignored --nocapture \
+    && cargo build --release --locked
 
 FROM debian:bookworm-slim
 

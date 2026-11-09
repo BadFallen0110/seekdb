@@ -303,3 +303,28 @@ fn failed_vector_update_and_bad_query_dimension_leave_data_unchanged() {
         Value::BigInt(1)
     );
 }
+
+#[test]
+fn parallel_dense_topk_preserves_primary_key_tie_order() {
+    let mut database = database();
+    let values = (1..=5_000)
+        .map(|id| format!("({id},'x','v{id}','[0,1]')"))
+        .collect::<Vec<_>>()
+        .join(",");
+    database
+        .execute(&format!("INSERT INTO docs VALUES {values}"))
+        .unwrap();
+    let rows = database
+        .execute(
+            "SELECT id, L2_DISTANCE(embedding,'[1,0]') AS d \
+             FROM docs ORDER BY d LIMIT 10",
+        )
+        .unwrap()
+        .rows;
+    assert_eq!(
+        rows.into_iter()
+            .map(|row| row[0].clone())
+            .collect::<Vec<_>>(),
+        (1..=10).map(Value::BigInt).collect::<Vec<_>>()
+    );
+}

@@ -526,7 +526,7 @@ impl Database {
                 topk.push(distance, primary_key);
                 Ok(())
             })?;
-            let mut rows = Vec::with_capacity(limit);
+            let mut rows = Vec::with_capacity(limit.min(table.rows.len()));
             for (_, primary_key) in topk.finish() {
                 let row = &table.rows[&primary_key];
                 rows.push(project_row(row, &projections, vectors)?);
@@ -578,6 +578,8 @@ impl Database {
                 }
                 left.primary_key.cmp(&right.primary_key)
             });
+        } else {
+            candidates.sort_by_key(|candidate| candidate.primary_key);
         }
         if let Some(limit) = select.limit {
             candidates.truncate(limit);

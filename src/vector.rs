@@ -188,7 +188,7 @@ impl TopKAccumulator {
     pub fn new(limit: usize) -> Self {
         Self {
             limit,
-            heap: BinaryHeap::with_capacity(limit.saturating_add(1)),
+            heap: BinaryHeap::with_capacity(limit.min(1024)),
         }
     }
 

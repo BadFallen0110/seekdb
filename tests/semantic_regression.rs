@@ -225,3 +225,18 @@ fn commit_or_rollback_without_transaction_is_an_error() {
     database.execute("START TRANSACTION").unwrap();
     database.execute("COMMIT WORK").unwrap();
 }
+
+#[test]
+fn huge_limit_does_not_preallocate_from_the_requested_number() {
+    let mut database = database();
+    database
+        .execute("INSERT INTO docs VALUES (1,'x','a','[0,0]'),(2,'x','b','[0,0]')")
+        .unwrap();
+    let result = database
+        .execute(
+            "SELECT id, L2_DISTANCE(embedding,'[0,0]') AS d \
+             FROM docs ORDER BY d LIMIT 18446744073709551615",
+        )
+        .unwrap();
+    assert_eq!(result.rows.len(), 2);
+}

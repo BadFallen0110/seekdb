@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use minivectordb::db::Database;
-use minivectordb::protocol::{ProtocolConfig, run};
+use minivectordb::protocol::{OutputFormat, ProtocolConfig, run};
 use minivectordb::sql::QueryMode;
 
 fn main() -> ExitCode {
@@ -22,9 +22,32 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
         PathBuf::from(env::var("MINIVECTORDDB_DATA_DIR").unwrap_or_else(|_| "/data".to_owned()));
     let mut ready_marker = env::var("MINIVECTORDDB_READY").unwrap_or_else(|_| "READY".to_owned());
     let mut mode = env::var("MINIVECTORDDB_QUERY_MODE").ok();
+    let mut output_format =
+        env::var("MINIVECTORDDB_OUTPUT").unwrap_or_else(|_| "framed".to_owned());
+    let mut cache_limit = None;
 
     let mut arguments = env::args().skip(1);
     while let Some(argument) = arguments.next() {
+        if let Some(value) = argument.strip_prefix("--data-dir=") {
+            data_directory = PathBuf::from(value);
+            continue;
+        }
+        if let Some(value) = argument.strip_prefix("--ready=") {
+            ready_marker = value.to_owned();
+            continue;
+        }
+        if let Some(value) = argument.strip_prefix("--mode=") {
+            mode = Some(value.to_owned());
+            continue;
+        }
+        if let Some(value) = argument.strip_prefix("--output=") {
+            output_format = value.to_owned();
+            continue;
+        }
+        if let Some(value) = argument.strip_prefix("--cache-bytes=") {
+            cache_limit = Some(value.parse::<usize>()?);
+            continue;
+        }
         match argument.as_str() {
             "--data-dir" => {
                 data_directory = PathBuf::from(
@@ -42,17 +65,25 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
                 mode = Some(arguments.next().ok_or("--mode requires exact or ann")?);
             }
             "--output" => {
-                let _ = arguments
+                output_format = arguments
                     .next()
                     .ok_or("--output requires a format argument")?;
-                // The default framed adapter is used until the official pack is
-                // available; accepting the option keeps deployment compatible.
+            }
+            "--cache-bytes" => {
+                cache_limit = Some(
+                    arguments
+                        .next()
+                        .ok_or("--cache-bytes requires an integer")?
+                        .parse::<usize>()?,
+                );
             }
             "--help" | "-h" => {
                 let mut stdout = BufWriter::new(std::io::stdout().lock());
                 writeln!(
                     stdout,
-                    "minivectordb [--data-dir PATH] [--ready TEXT] [--mode exact|ann]"
+                    "minivectordb [--data-dir PATH] [--ready TEXT] \
+                     [--mode exact|ann] [--output framed|tsv|mysql] \
+                     [--cache-bytes N]"
                 )?;
                 stdout.flush()?;
                 return Ok(());
@@ -61,7 +92,10 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let mut database = Database::open(data_directory)?;
+    let mut database = match cache_limit {
+        Some(cache_limit) => Database::open_with_cache_limit(data_directory, cache_limit)?,
+        None => Database::open(data_directory)?,
+    };
     if let Some(mode) = mode {
         database.set_query_mode(match mode.to_ascii_lowercase().as_str() {
             "exact" => QueryMode::Exact,
@@ -69,6 +103,12 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
             _ => return Err("query mode must be exact or ann".into()),
         });
     }
+    let output_format = match output_format.to_ascii_lowercase().as_str() {
+        "framed" => OutputFormat::Framed,
+        "tsv" | "mysql-batch" => OutputFormat::Tsv,
+        "mysql" => OutputFormat::Mysql,
+        _ => return Err("output format must be framed, tsv, or mysql".into()),
+    };
 
     let reader = BufReader::new(std::io::stdin());
     let writer = BufWriter::new(std::io::stdout().lock());
@@ -76,7 +116,10 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
         &mut database,
         reader,
         writer,
-        &ProtocolConfig { ready_marker },
+        &ProtocolConfig {
+            ready_marker,
+            output_format,
+        },
     )?;
     Ok(())
 }

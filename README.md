@@ -33,6 +33,8 @@ The process does not listen on a network port. Use `-i` rather than `-d` or
 | `--data-dir PATH` | `/data` | Durable data directory |
 | `--ready TEXT` | `READY` | Startup marker written to stdout |
 | `--mode exact\|ann` | `exact` | Vector query mode |
+| `--output framed\|tsv\|mysql` | `framed` | Result framing format |
+| `--cache-bytes N` | 64 MiB | Vector page/value cache budget |
 
 Equivalent environment variables are `MINIVECTORDDB_DATA_DIR`,
 `MINIVECTORDDB_READY`, and `MINIVECTORDDB_QUERY_MODE`. A SQL comment containing
@@ -49,9 +51,11 @@ rows retain only compact vector handles.
 Supported:
 
 - `CREATE TABLE` and `DROP TABLE`
+- `CREATE TABLE IF NOT EXISTS` and `DROP TABLE IF EXISTS`
 - `BIGINT`, `VARCHAR(n)`, and `VECTOR(n)`
 - one `BIGINT PRIMARY KEY` per table and at most one vector column
 - multi-row `INSERT`
+- constant queries such as `SELECT 1 AS value`
 - `SELECT *`, ordinary projections, `L2_DISTANCE`, `WHERE`, `AND`,
   `ORDER BY`, and `LIMIT`
 - `UPDATE` and `DELETE` by predicate
@@ -109,7 +113,7 @@ rebuildable page store derived from committed WAL records.
 
 ## Protocol
 
-The current adapter emits:
+The default framed adapter emits:
 
 ```text
 READY
@@ -121,6 +125,11 @@ AFFECTED	1
 OK
 ERROR	1201	TYPE_MISMATCH	mismatched type
 ```
+
+`--output tsv` emits a header row and tab-separated rows suitable for
+mysql-batch-style parsing. `--output mysql` emits an ASCII table and
+`Query OK` statuses. Input accepts semicolon boundaries plus single-line SQL
+without a trailing semicolon.
 
 Fields use backslash escapes for tab, carriage return, newline, and backslash.
 Every response is flushed immediately. Diagnostics go to stderr. The official

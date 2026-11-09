@@ -184,3 +184,36 @@ fn binary_accepts_multiple_semicolon_statements() {
     assert!(stdout.contains("ROW\t1"));
     std::fs::remove_dir_all(data_dir).unwrap();
 }
+
+#[test]
+fn binary_can_emit_mysql_batch_style_tsv() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let data_dir =
+        std::env::temp_dir().join(format!("minivectordb-tsv-{}-{nonce}", std::process::id()));
+    let mut child = Command::new(env!("CARGO_BIN_EXE_minivectordb"))
+        .args([
+            "--data-dir",
+            data_dir.to_str().unwrap(),
+            "--ready",
+            "",
+            "--output",
+            "tsv",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"SELECT 1 AS value;\nQUIT;\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "value\n1\n");
+    std::fs::remove_dir_all(data_dir).unwrap();
+}

@@ -6,9 +6,11 @@ pub enum Statement {
     CreateTable {
         name: String,
         columns: Vec<ColumnDefinition>,
+        if_not_exists: bool,
     },
     DropTable {
         name: String,
+        if_exists: bool,
     },
     Insert {
         table: String,
@@ -46,7 +48,7 @@ pub struct ColumnDefinition {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectStatement {
     pub projections: Vec<SelectExpression>,
-    pub table: String,
+    pub table: Option<String>,
     pub filter: Option<Expression>,
     pub order_by: Vec<OrderExpression>,
     pub limit: Option<usize>,
@@ -57,6 +59,10 @@ pub enum SelectExpression {
     Wildcard,
     Column {
         name: String,
+        alias: Option<String>,
+    },
+    Literal {
+        value: Literal,
         alias: Option<String>,
     },
     L2Distance {
@@ -320,8 +326,15 @@ impl Parser {
         }
         if self.consume_keyword("DROP") {
             self.expect_keyword("TABLE")?;
+            let if_exists = if self.consume_keyword("IF") {
+                self.expect_keyword("EXISTS")?;
+                true
+            } else {
+                false
+            };
             return Ok(Statement::DropTable {
                 name: self.expect_identifier()?,
+                if_exists,
             });
         }
         if self.consume_keyword("INSERT") {
@@ -361,6 +374,13 @@ impl Parser {
     }
 
     fn parse_create_table(&mut self) -> Result<Statement, DbError> {
+        let if_not_exists = if self.consume_keyword("IF") {
+            self.expect_keyword("NOT")?;
+            self.expect_keyword("EXISTS")?;
+            true
+        } else {
+            false
+        };
         let name = self.expect_identifier()?;
         self.expect_symbol('(')?;
         let mut columns = Vec::new();
@@ -417,7 +437,11 @@ impl Parser {
             self.expect_symbol(')')?;
             break;
         }
-        Ok(Statement::CreateTable { name, columns })
+        Ok(Statement::CreateTable {
+            name,
+            columns,
+            if_not_exists,
+        })
     }
 
     fn parse_parenthesized_size(&mut self) -> Result<usize, DbError> {
@@ -485,6 +509,13 @@ impl Parser {
         loop {
             if self.consume_symbol('*') {
                 projections.push(SelectExpression::Wildcard);
+            } else if matches!(
+                self.peek().kind,
+                TokenKind::Number(_) | TokenKind::String(_)
+            ) {
+                let value = self.parse_literal()?;
+                let alias = self.parse_optional_alias()?;
+                projections.push(SelectExpression::Literal { value, alias });
             } else {
                 let name = self.expect_identifier()?;
                 if name.eq_ignore_ascii_case("L2_DISTANCE") && self.consume_symbol('(') {
@@ -508,15 +539,19 @@ impl Parser {
             }
         }
 
-        self.expect_keyword("FROM")?;
-        let table = self.expect_identifier()?;
-        if self.peek_is_keyword("JOIN")
-            || self.peek_is_keyword("INNER")
-            || self.peek_is_keyword("LEFT")
-            || self.peek_is_keyword("RIGHT")
-        {
-            return Err(self.unsupported("JOIN is not supported"));
-        }
+        let table = if self.consume_keyword("FROM") {
+            let table = self.expect_identifier()?;
+            if self.peek_is_keyword("JOIN")
+                || self.peek_is_keyword("INNER")
+                || self.peek_is_keyword("LEFT")
+                || self.peek_is_keyword("RIGHT")
+            {
+                return Err(self.unsupported("JOIN is not supported"));
+            }
+            Some(table)
+        } else {
+            None
+        };
         let filter = if self.consume_keyword("WHERE") {
             Some(self.parse_expression()?)
         } else {

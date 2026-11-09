@@ -153,3 +153,28 @@ fn vector_rows_use_the_bounded_page_store() {
     );
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn corrupt_vector_file_is_rebuilt_from_committed_wal() {
+    let directory = unique_dir();
+    {
+        let mut database = Database::open_with_cache_limit(&directory, 64 * 1024).unwrap();
+        database
+            .execute("CREATE TABLE docs (id BIGINT PRIMARY KEY, embedding VECTOR(2))")
+            .unwrap();
+        database
+            .execute("INSERT INTO docs VALUES (1,'[1,0]'),(2,'[0,1]')")
+            .unwrap();
+        database.close().unwrap();
+    }
+    std::fs::write(directory.join("vectors.bin"), b"corrupt").unwrap();
+    let mut reopened = Database::open_with_cache_limit(&directory, 64 * 1024).unwrap();
+    let result = reopened
+        .execute(
+            "SELECT id, L2_DISTANCE(embedding,'[1,0]') AS d \
+             FROM docs ORDER BY d LIMIT 1",
+        )
+        .unwrap();
+    assert_eq!(result.rows[0][0], Value::BigInt(1));
+    std::fs::remove_dir_all(directory).unwrap();
+}

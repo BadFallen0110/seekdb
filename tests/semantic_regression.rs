@@ -116,3 +116,17 @@ fn distance_ties_use_primary_key_ascending() {
     assert_eq!(rows[0][0], Value::BigInt(3));
     assert_eq!(rows[1][0], Value::BigInt(7));
 }
+
+#[test]
+fn mysql_style_if_exists_setup_commands_are_idempotent() {
+    let mut database = Database::memory();
+    database.execute("DROP TABLE IF EXISTS docs").unwrap();
+    database
+        .execute("CREATE TABLE IF NOT EXISTS docs (id BIGINT PRIMARY KEY, body VARCHAR(8))")
+        .unwrap();
+    database
+        .execute("CREATE TABLE IF NOT EXISTS docs (id BIGINT PRIMARY KEY, body VARCHAR(8))")
+        .unwrap();
+    database.execute("DROP TABLE IF EXISTS docs").unwrap();
+    database.execute("DROP TABLE IF EXISTS docs").unwrap();
+}

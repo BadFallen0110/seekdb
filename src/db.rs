@@ -106,9 +106,16 @@ impl Database {
 
     fn execute_statement(&mut self, statement: Statement) -> Result<QueryResult, DbError> {
         match statement {
-            Statement::CreateTable { name, columns } => {
+            Statement::CreateTable {
+                name,
+                columns,
+                if_not_exists,
+            } => {
                 self.reject_ddl_in_transaction("CREATE TABLE")?;
                 if self.table(&name).is_ok() {
+                    if if_not_exists {
+                        return Ok(QueryResult::default());
+                    }
                     return Err(DbError::new(
                         ErrorCategory::TableExists,
                         format!("table `{name}` already exists"),
@@ -120,14 +127,17 @@ impl Database {
                     .push(storage::Mutation::CreateTable(schema));
                 Ok(QueryResult::default())
             }
-            Statement::DropTable { name } => {
+            Statement::DropTable { name, if_exists } => {
                 self.reject_ddl_in_transaction("DROP TABLE")?;
-                self.tables.remove(&name).ok_or_else(|| {
-                    DbError::new(
+                let Some(_) = self.tables.remove(&name) else {
+                    if if_exists {
+                        return Ok(QueryResult::default());
+                    }
+                    return Err(DbError::new(
                         ErrorCategory::TableNotFound,
                         format!("table `{name}` does not exist"),
-                    )
-                })?;
+                    ));
+                };
                 self.pending_mutations
                     .push(storage::Mutation::DropTable(name));
                 Ok(QueryResult::default())
@@ -356,11 +366,15 @@ impl Database {
     }
 
     fn execute_select(&mut self, select: SelectStatement) -> Result<QueryResult, DbError> {
+        if select.table.is_none() {
+            return execute_constant_select(select);
+        }
+        let table_name = select.table.as_deref().expect("checked table source");
         let (tables, vectors) = (&self.tables, &mut self.vectors);
-        let table = tables.get(&select.table).ok_or_else(|| {
+        let table = tables.get(table_name).ok_or_else(|| {
             DbError::new(
                 ErrorCategory::TableNotFound,
-                format!("table `{}` does not exist", select.table),
+                format!("table `{table_name}` does not exist"),
             )
         })?;
         let mut columns = Vec::new();
@@ -377,6 +391,11 @@ impl Database {
                     let index = table.schema.column_index(name)?;
                     columns.push(alias.clone().unwrap_or_else(|| name.clone()));
                     projections.push(Projection::Column(index));
+                }
+                SelectExpression::Literal { value, alias } => {
+                    let value = literal_value(value);
+                    columns.push(alias.clone().unwrap_or_else(|| value_column_name(&value)));
+                    projections.push(Projection::Literal(value));
                 }
                 SelectExpression::L2Distance {
                     column,
@@ -437,7 +456,7 @@ impl Database {
                                 index: vector_index,
                                 query,
                             } => Some((limit, *vector_index, query.clone())),
-                            Projection::Column(_) => None,
+                            Projection::Column(_) | Projection::Literal(_) => None,
                         },
                         OrderTarget::TableColumn(_) => None,
                     }
@@ -634,6 +653,7 @@ impl Database {
 
 enum Projection {
     Column(usize),
+    Literal(Value),
     L2Distance { index: usize, query: Vec<f32> },
 }
 
@@ -733,6 +753,7 @@ fn project_row(
                 Value::VectorRef(handle) => Value::Vector(vectors.read(*handle)?),
                 other => other.clone(),
             },
+            Projection::Literal(value) => value.clone(),
             Projection::L2Distance { index, query } => Value::Float(crate::vector::l2_distance(
                 &read_vector_value(vectors, &row[*index])?,
                 query,
@@ -740,6 +761,78 @@ fn project_row(
         });
     }
     Ok(output)
+}
+
+fn execute_constant_select(select: SelectStatement) -> Result<QueryResult, DbError> {
+    if let Some(filter) = &select.filter {
+        let _ = filter;
+        return Err(DbError::new(
+            ErrorCategory::Unsupported,
+            "WHERE requires a FROM table",
+        ));
+    }
+    let mut columns = Vec::new();
+    let mut row = Vec::new();
+    for projection in select.projections {
+        match projection {
+            SelectExpression::Wildcard => {
+                return Err(DbError::new(
+                    ErrorCategory::Unsupported,
+                    "SELECT * requires a FROM table",
+                ));
+            }
+            SelectExpression::Column { name, .. } => {
+                return Err(DbError::new(
+                    ErrorCategory::ColumnNotFound,
+                    format!("column `{name}` requires a FROM table"),
+                ));
+            }
+            SelectExpression::Literal { value, alias } => {
+                let value = literal_value(&value);
+                columns.push(alias.unwrap_or_else(|| value_column_name(&value)));
+                row.push(value);
+            }
+            SelectExpression::L2Distance { .. } => {
+                return Err(DbError::new(
+                    ErrorCategory::Unsupported,
+                    "L2_DISTANCE requires a FROM table",
+                ));
+            }
+        }
+    }
+    if !select.order_by.is_empty() {
+        return Err(DbError::new(
+            ErrorCategory::Unsupported,
+            "ORDER BY on constants is not supported",
+        ));
+    }
+    let rows = if select.limit == Some(0) {
+        Vec::new()
+    } else {
+        vec![row]
+    };
+    Ok(QueryResult {
+        columns,
+        rows,
+        affected: 0,
+    })
+}
+
+fn literal_value(literal: &Literal) -> Value {
+    match literal {
+        Literal::BigInt(value) => Value::BigInt(*value),
+        Literal::Varchar(value) => Value::Varchar(value.clone()),
+    }
+}
+
+fn value_column_name(value: &Value) -> String {
+    match value {
+        Value::BigInt(value) => value.to_string(),
+        Value::Float(value) => value.to_string(),
+        Value::Varchar(value) => value.clone(),
+        Value::Vector(_) => "VECTOR".to_owned(),
+        Value::VectorRef(_) => "VECTOR".to_owned(),
+    }
 }
 
 fn read_vector_value(vectors: &mut VectorStore, value: &Value) -> Result<Vec<f32>, DbError> {

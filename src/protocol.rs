@@ -2,17 +2,26 @@ use std::io::{BufRead, Write};
 
 use crate::db::{Database, QueryResult};
 use crate::error::{DbError, ErrorCategory};
-use crate::sql::QueryMode;
+use crate::sql::{QueryMode, parse};
 use crate::value::Value;
 
 pub struct ProtocolConfig {
     pub ready_marker: String,
+    pub output_format: OutputFormat,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OutputFormat {
+    Framed,
+    Tsv,
+    Mysql,
 }
 
 impl Default for ProtocolConfig {
     fn default() -> Self {
         Self {
             ready_marker: "READY".to_owned(),
+            output_format: OutputFormat::Framed,
         }
     }
 }
@@ -34,14 +43,14 @@ pub fn run<R: BufRead, W: Write>(
         pending.push_str(&line);
         pending.push('\n');
 
-        let control = pending.trim();
-        if !control.contains(';') && is_exit_command(control) {
+        let control = pending.trim().to_owned();
+        if !control.contains(';') && is_exit_command(&control) {
             pending.clear();
             database.close()?;
             return Ok(());
         }
-        if !control.contains(';') && is_mode_hint(control) {
-            apply_mode_hint(database, control)?;
+        if !control.contains(';') && is_mode_hint(&control) {
+            apply_mode_hint(database, &control)?;
             pending.clear();
             writeln!(writer, "OK")?;
             writer.flush()?;
@@ -52,39 +61,65 @@ pub fn run<R: BufRead, W: Write>(
         if consumed > 0 {
             pending.drain(..consumed);
         }
+        if statements.is_empty() && consumed == 0 && !control.is_empty() {
+            let should_execute = match parse(&control) {
+                Ok(_) => true,
+                Err(error) => error.category() != ErrorCategory::Syntax,
+            };
+            if should_execute {
+                if execute_text(database, &mut writer, &control, config)? {
+                    return Ok(());
+                }
+                pending.clear();
+                continue;
+            }
+        }
         for statement in statements {
             let statement = statement.trim();
             if statement.is_empty() {
                 continue;
             }
-            if is_exit_command(statement) {
-                database.close()?;
+            if execute_text(database, &mut writer, statement, config)? {
                 return Ok(());
             }
-            apply_comment_mode_hint(database, statement);
-            match database.execute(statement) {
-                Ok(result) => write_result(&mut writer, &result)?,
-                Err(error) => write_error(&mut writer, &error)?,
-            }
-            writer.flush()?;
         }
     }
 
     if !pending.trim().is_empty() {
         let statement = pending.trim();
-        if is_exit_command(statement) || is_mode_hint(statement) {
-            database.close()?;
+        if execute_text(database, &mut writer, statement, config)? {
             return Ok(());
         }
-        apply_comment_mode_hint(database, statement);
-        match database.execute(statement) {
-            Ok(result) => write_result(&mut writer, &result)?,
-            Err(error) => write_error(&mut writer, &error)?,
-        }
-        writer.flush()?;
     }
 
     database.close()
+}
+
+fn execute_text(
+    database: &mut Database,
+    writer: &mut impl Write,
+    statement: &str,
+    config: &ProtocolConfig,
+) -> Result<bool, DbError> {
+    if is_exit_command(statement) {
+        database.close()?;
+        return Ok(true);
+    }
+    if is_mode_hint(statement) {
+        match apply_mode_hint(database, statement) {
+            Ok(()) => writeln!(writer, "OK")?,
+            Err(error) => write_error(writer, &error, config.output_format)?,
+        }
+        writer.flush()?;
+        return Ok(false);
+    }
+    apply_comment_mode_hint(database, statement);
+    match database.execute(statement) {
+        Ok(result) => write_result(writer, &result, config.output_format)?,
+        Err(error) => write_error(writer, &error, config.output_format)?,
+    }
+    writer.flush()?;
+    Ok(false)
 }
 
 pub fn extract_statements(buffer: &str) -> (Vec<String>, usize) {
@@ -172,7 +207,19 @@ pub fn extract_statements(buffer: &str) -> (Vec<String>, usize) {
     (statements, consumed_bytes)
 }
 
-fn write_result(writer: &mut impl Write, result: &QueryResult) -> Result<(), DbError> {
+fn write_result(
+    writer: &mut impl Write,
+    result: &QueryResult,
+    format: OutputFormat,
+) -> Result<(), DbError> {
+    match format {
+        OutputFormat::Framed => write_framed_result(writer, result),
+        OutputFormat::Tsv => write_tsv_result(writer, result),
+        OutputFormat::Mysql => write_mysql_result(writer, result),
+    }
+}
+
+fn write_framed_result(writer: &mut impl Write, result: &QueryResult) -> Result<(), DbError> {
     if !result.columns.is_empty() {
         writeln!(writer, "BEGIN_RESULT")?;
         writeln!(
@@ -201,14 +248,117 @@ fn write_result(writer: &mut impl Write, result: &QueryResult) -> Result<(), DbE
     Ok(())
 }
 
-fn write_error(writer: &mut impl Write, error: &DbError) -> Result<(), DbError> {
+fn write_tsv_result(writer: &mut impl Write, result: &QueryResult) -> Result<(), DbError> {
+    if !result.columns.is_empty() {
+        writeln!(
+            writer,
+            "{}",
+            result
+                .columns
+                .iter()
+                .map(|column| escape_field(column))
+                .collect::<Vec<_>>()
+                .join("\t")
+        )?;
+        for row in &result.rows {
+            writeln!(
+                writer,
+                "{}",
+                row.iter().map(format_value).collect::<Vec<_>>().join("\t")
+            )?;
+        }
+    } else if result.affected > 0 {
+        writeln!(writer, "AFFECTED\t{}", result.affected)?;
+    } else {
+        writeln!(writer, "OK")?;
+    }
+    Ok(())
+}
+
+fn write_mysql_result(writer: &mut impl Write, result: &QueryResult) -> Result<(), DbError> {
+    if result.columns.is_empty() {
+        if result.affected > 0 {
+            writeln!(writer, "Query OK, {} rows affected", result.affected)?;
+        } else {
+            writeln!(writer, "Query OK")?;
+        }
+        return Ok(());
+    }
+    let mut widths = result
+        .columns
+        .iter()
+        .map(|column| column.chars().count())
+        .collect::<Vec<_>>();
+    let values = result
+        .rows
+        .iter()
+        .map(|row| row.iter().map(format_value).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    for row in &values {
+        for (index, value) in row.iter().enumerate() {
+            widths[index] = widths[index].max(value.chars().count());
+        }
+    }
+    let border = format!(
+        "+{}+",
+        widths
+            .iter()
+            .map(|width| "-".repeat(width + 2))
+            .collect::<Vec<_>>()
+            .join("+")
+    );
+    writeln!(writer, "{border}")?;
     writeln!(
         writer,
-        "ERROR\t{}\t{}\t{}",
-        error_code(error.category()),
-        category_name(error.category()),
-        escape_field(&error.to_string())
+        "| {} |",
+        result
+            .columns
+            .iter()
+            .zip(&widths)
+            .map(|(column, width)| format!("{column:<width$}"))
+            .collect::<Vec<_>>()
+            .join(" | ")
     )?;
+    writeln!(writer, "{border}")?;
+    for row in values {
+        writeln!(
+            writer,
+            "| {} |",
+            row.iter()
+                .zip(&widths)
+                .map(|(value, width)| format!("{value:<width$}"))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        )?;
+    }
+    writeln!(writer, "{border}")?;
+    Ok(())
+}
+
+fn write_error(
+    writer: &mut impl Write,
+    error: &DbError,
+    format: OutputFormat,
+) -> Result<(), DbError> {
+    match format {
+        OutputFormat::Framed | OutputFormat::Tsv => {
+            writeln!(
+                writer,
+                "ERROR\t{}\t{}\t{}",
+                error_code(error.category()),
+                category_name(error.category()),
+                escape_field(&error.to_string())
+            )?;
+        }
+        OutputFormat::Mysql => {
+            writeln!(
+                writer,
+                "ERROR {} (HY000): {}",
+                error_code(error.category()),
+                error
+            )?;
+        }
+    }
     Ok(())
 }
 

@@ -7,6 +7,8 @@ target, not a claim of official conformance.
 ## Current input
 
 - SQL statements are separated by semicolons.
+- A syntactically complete SQL statement is also accepted without a semicolon
+  at the end of an input line.
 - String literals, backtick identifiers, line comments, and block comments are
   respected while finding statement boundaries.
 - `QUIT`, `EXIT`, `SHUTDOWN`, and `\q` end the process.
@@ -16,7 +18,11 @@ target, not a claim of official conformance.
 
 ## Current output
 
-- Startup: one configurable ready line, default `READY`.
+Three selectable formats are available as `framed` (default), `tsv`, and
+`mysql`.
+
+- Startup: one configurable ready line, default `READY`; an empty argument
+  suppresses the ready line.
 - Query:
 
 ```text
@@ -30,6 +36,24 @@ END_RESULT
 - DDL, transaction control, and zero-row DML: `OK`.
 - Error: `ERROR<TAB>code<TAB>category<TAB>escaped-message`.
 - Tab, newline, carriage return, and backslash are escaped with a backslash.
+
+TSV format:
+
+```text
+column_a	column_b
+value_a	value_b
+```
+
+MySQL-style format:
+
+```text
++----------+
+| column_a |
++----------+
+| value_a  |
++----------+
+Query OK, 1 rows affected
+```
 
 ## Official-pack integration points
 

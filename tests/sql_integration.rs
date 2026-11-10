@@ -3,7 +3,9 @@ use minivectordb::error::ErrorCategory;
 use minivectordb::value::Value;
 use std::io::Write;
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+
+mod support;
+use support::unique_temp_path;
 
 fn sample_db() -> Database {
     let mut db = Database::memory();
@@ -249,14 +251,7 @@ fn drop_and_recreate_discards_prepared_vector_scan_state() {
 
 #[test]
 fn binary_accepts_multiple_semicolon_statements() {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let data_dir = std::env::temp_dir().join(format!(
-        "minivectordb-protocol-{}-{nonce}",
-        std::process::id()
-    ));
+    let data_dir = unique_temp_path("minivectordb-protocol");
     let mut child = Command::new(env!("CARGO_BIN_EXE_minivectordb"))
         .args([
             "--data-dir",
@@ -291,12 +286,7 @@ fn binary_accepts_multiple_semicolon_statements() {
 
 #[test]
 fn binary_can_emit_mysql_batch_style_tsv() {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let data_dir =
-        std::env::temp_dir().join(format!("minivectordb-tsv-{}-{nonce}", std::process::id()));
+    let data_dir = unique_temp_path("minivectordb-tsv");
     let mut child = Command::new(env!("CARGO_BIN_EXE_minivectordb"))
         .args([
             "--data-dir",

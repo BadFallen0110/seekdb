@@ -60,6 +60,15 @@ The prior non-batched local run on the same machine was approximately
 `write=484.4624ms query=1.2972755s`. The write improvement is a local regression
 signal; official cgroup measurements remain authoritative.
 
+## Parallel test isolation
+
+One Linux Docker build failed because concurrently started JSONL tests could
+derive the same temporary directory from the process ID and clock resolution;
+the affected child exited before the ready line. Test paths now include an
+atomic sequence component. Twenty consecutive `jsonl_protocol` runs with eight
+test threads passed, and all integration test binaries use the same unique-path
+helper.
+
 ```text
 cargo test --release --test benchmark -- --ignored --nocapture
 ```

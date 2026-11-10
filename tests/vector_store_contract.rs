@@ -1,17 +1,12 @@
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use minivectordb::vector_store::VectorStore;
 
+mod support;
+use support::unique_temp_path;
+
 fn unique_file() -> PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "minivectordb-vectors-{}-{nonce}.bin",
-        std::process::id()
-    ))
+    unique_temp_path("minivectordb-vectors").with_extension("bin")
 }
 
 #[test]

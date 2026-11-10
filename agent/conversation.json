@@ -233,6 +233,13 @@
       "command": "cargo test --offline --test storage_delta_contract failed_duplicate_vector_inserts_do_not_append_orphan_payloads -- --nocapture",
       "status": "pass",
       "output": "Before the key precheck, ten rejected duplicate-vector inserts grew vectors.bin from 12 to 132 bytes. Insert keys are now checked before materializing vectors, so the rejected batch leaves the file length unchanged."
+    },
+    {
+      "id": "E22",
+      "kind": "parallel_test_directory_collision",
+      "command": "GitHub Actions run 42774824467, then twenty local jsonl_protocol runs with --test-threads=8",
+      "status": "pass",
+      "output": "Docker build failed once with `EOF while parsing a value` because parallel JSONL tests could share a pid+nano temporary path. Adding an atomic sequence suffix and a shared test helper made all twenty repeated parallel runs pass; all integration binaries now use collision-resistant paths."
     }
   ],
   "retrospective": {
@@ -262,6 +269,6 @@
   ],
   "evidence_attribution": {
     "student_contributions": ["/user_prompts/0/content", "/user_prompts/1/content", "/user_prompts/2/content", "/user_prompts/3/content", "/user_prompts/4/content", "/user_prompts/5/content", "/user_prompts/6/content", "/user_prompts/7/content"],
-    "agent_or_tool_only_results": ["/experiments/0/output", "/experiments/1/output", "/experiments/2/output", "/experiments/3/output", "/experiments/4/output", "/experiments/5/output", "/experiments/6/output", "/experiments/7/output", "/experiments/8/output", "/experiments/9/output", "/experiments/10/output", "/experiments/11/output", "/experiments/12/output", "/experiments/13/output", "/experiments/14/output", "/experiments/15/output", "/experiments/16/output", "/experiments/17/output", "/experiments/18/output", "/experiments/19/output", "/experiments/20/output"]
+    "agent_or_tool_only_results": ["/experiments/0/output", "/experiments/1/output", "/experiments/2/output", "/experiments/3/output", "/experiments/4/output", "/experiments/5/output", "/experiments/6/output", "/experiments/7/output", "/experiments/8/output", "/experiments/9/output", "/experiments/10/output", "/experiments/11/output", "/experiments/12/output", "/experiments/13/output", "/experiments/14/output", "/experiments/15/output", "/experiments/16/output", "/experiments/17/output", "/experiments/18/output", "/experiments/19/output", "/experiments/20/output", "/experiments/21/output"]
   }
 }

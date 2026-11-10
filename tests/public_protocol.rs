@@ -1,9 +1,11 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Number, Value};
+
+mod support;
+use support::unique_temp_path;
 
 struct Harness {
     child: Child,
@@ -82,14 +84,7 @@ impl Drop for Harness {
 }
 
 fn unique_directory(case_id: &str) -> PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "minivectordb-public-{case_id}-{}-{nonce}",
-        std::process::id()
-    ))
+    unique_temp_path(&format!("minivectordb-public-{case_id}"))
 }
 
 fn assert_expected(response: &Value, expected: &Value) {

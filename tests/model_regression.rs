@@ -1,19 +1,17 @@
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use minivectordb::db::Database;
 use minivectordb::value::Value;
 
+mod support;
+use support::unique_temp_path;
+
 type ModelRow = (String, String);
 
 fn unique_dir() -> PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!("minivectordb-model-{}-{nonce}", std::process::id()))
+    unique_temp_path("minivectordb-model")
 }
 
 fn next(state: &mut u64) -> u64 {

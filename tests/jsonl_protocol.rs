@@ -1,6 +1,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
@@ -13,12 +14,16 @@ struct Harness {
 
 impl Harness {
     fn start() -> (Self, PathBuf) {
+        static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let data_directory =
-            std::env::temp_dir().join(format!("minivectordb-jsonl-{}-{nonce}", std::process::id()));
+        let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let data_directory = std::env::temp_dir().join(format!(
+            "minivectordb-jsonl-{}-{nonce}-{sequence}",
+            std::process::id()
+        ));
         let harness = Self::start_at(&data_directory);
         (harness, data_directory)
     }

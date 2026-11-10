@@ -1,16 +1,14 @@
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use minivectordb::db::Database;
 use minivectordb::error::ErrorCategory;
 use minivectordb::value::Value;
 
+mod support;
+use support::unique_temp_path;
+
 fn unique_dir() -> PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!("minivectordb-delta-{}-{nonce}", std::process::id()))
+    unique_temp_path("minivectordb-delta")
 }
 
 fn zero_vector() -> String {

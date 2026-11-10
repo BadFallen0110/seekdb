@@ -1,6 +1,8 @@
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+
+mod support;
+use support::unique_temp_path;
 
 struct Harness {
     child: Child,
@@ -62,14 +64,7 @@ impl Harness {
 }
 
 fn unique_dir() -> std::path::PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "minivectordb-recovery-{}-{nonce}",
-        std::process::id()
-    ))
+    unique_temp_path("minivectordb-recovery")
 }
 
 #[test]

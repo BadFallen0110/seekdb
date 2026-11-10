@@ -152,8 +152,20 @@
         "index_explanation": "因为两张表的数据相互关联，如果只修改其中一张，可能导致数据不一致。",
         "limits": "因为公开用例只能覆盖部分情况，实际运行中可能出现其他问题，需要进行完整测试。"
       },
+      "clarifications": [
+        {
+          "topic": "forced_kill_visibility",
+          "question": "After auto-committed id 1, BEGIN, uncommitted id 2, and a forced kill, which id is visible after restart?",
+          "student_answer": "看到 id 1（未提交的 id 2 会在崩溃重启后被回滚）。"
+        },
+        {
+          "topic": "duplicate_index_entries",
+          "question": "Why can deleting and reinserting id 1 return duplicate rows when the auxiliary index entry was not removed?",
+          "student_answer": "因为索引里有两条指向 id 1 的索引项（旧的没删，新插入的又加了一条，导致按普通字段查询时扫描到两条索引项并回表两次）。"
+        }
+      ],
       "attribution_note": "The commands were executed by the student on the recorded commit. The answers are the student's own words. Implementation and test design remain Agent-authored.",
-      "review_note": "The run is valid evidence of execution. The transaction and index answers would benefit from more precise clarification."
+      "review_note": "The run is valid evidence of execution. Follow-up answers correctly identify committed-only recovery and duplicate auxiliary-index entries."
     }
   ],
   "experiments": [
@@ -349,7 +361,7 @@
     "The recorded user prompts show task selection and approval but do not by themselves prove technical understanding or independent result interpretation."
   ],
   "evidence_attribution": {
-    "student_contributions": ["/user_prompts/0/content", "/user_prompts/1/content", "/user_prompts/2/content", "/user_prompts/3/content", "/user_prompts/4/content", "/user_prompts/5/content", "/user_prompts/6/content", "/user_prompts/7/content", "/user_prompts/9/content", "/user_prompts/10/content", "/student_runs/0/student_answers/transaction_prediction", "/student_runs/0/student_answers/transaction_explanation", "/student_runs/0/student_answers/index_prediction", "/student_runs/0/student_answers/index_explanation", "/student_runs/0/student_answers/limits"],
+    "student_contributions": ["/user_prompts/0/content", "/user_prompts/1/content", "/user_prompts/2/content", "/user_prompts/3/content", "/user_prompts/4/content", "/user_prompts/5/content", "/user_prompts/6/content", "/user_prompts/7/content", "/user_prompts/9/content", "/user_prompts/10/content", "/student_runs/0/student_answers/transaction_prediction", "/student_runs/0/student_answers/transaction_explanation", "/student_runs/0/student_answers/index_prediction", "/student_runs/0/student_answers/index_explanation", "/student_runs/0/student_answers/limits", "/student_runs/0/clarifications/0/student_answer", "/student_runs/0/clarifications/1/student_answer"],
     "agent_or_tool_only_results": ["/experiments/0/output", "/experiments/1/output", "/experiments/2/output", "/experiments/3/output", "/experiments/4/output", "/experiments/5/output", "/experiments/6/output", "/experiments/7/output", "/experiments/8/output", "/experiments/9/output", "/experiments/10/output", "/experiments/11/output", "/experiments/12/output", "/experiments/13/output", "/experiments/14/output", "/experiments/15/output", "/experiments/16/output", "/experiments/17/output", "/experiments/18/output", "/experiments/19/output", "/experiments/20/output", "/experiments/21/output", "/experiments/22/output"]
   }
 }

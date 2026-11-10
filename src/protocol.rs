@@ -234,18 +234,24 @@ fn is_mutation(statement: &Statement) -> bool {
 }
 
 fn semantic_error_code(error: &DbError) -> &'static str {
+    let message = error.to_string().to_ascii_lowercase();
+    if matches!(
+        error.category(),
+        ErrorCategory::Syntax | ErrorCategory::TypeMismatch | ErrorCategory::Range
+    ) && message.contains("vector")
+    {
+        return if message.contains("dimension") {
+            "dimension_mismatch"
+        } else {
+            "invalid_vector"
+        };
+    }
     match error.category() {
         ErrorCategory::Syntax => "syntax_error",
         ErrorCategory::Unsupported => "unsupported_sql",
         ErrorCategory::TableNotFound => "table_not_found",
         ErrorCategory::TableExists => "table_exists",
         ErrorCategory::ColumnNotFound => "column_not_found",
-        ErrorCategory::TypeMismatch
-            if error.to_string().to_ascii_lowercase().contains("vector")
-                && error.to_string().to_ascii_lowercase().contains("dimension") =>
-        {
-            "dimension_mismatch"
-        }
         ErrorCategory::TypeMismatch => "type_mismatch",
         ErrorCategory::Range => "range_error",
         ErrorCategory::DuplicateKey => "duplicate_key",

@@ -18,6 +18,12 @@ fn rejects_null_in_values() {
 }
 
 #[test]
+fn rejects_null_projection_as_unsupported() {
+    let error = parse("SELECT NULL").unwrap_err();
+    assert_eq!(error.category(), ErrorCategory::Unsupported);
+}
+
+#[test]
 fn parses_multiline_create_and_batch_insert() {
     let create = parse(
         "CREATE TABLE docs (\n\

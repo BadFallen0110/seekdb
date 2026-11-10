@@ -28,6 +28,21 @@
       "id": "U5",
       "time": "2026-11-09",
       "content": "你做到有把握拿满分的时候告诉我，不要去提测，先提交到仓库去。现在继续完善代码"
+    },
+    {
+      "id": "U6",
+      "time": "2026-11-10",
+      "content": "现在装一个tinyfish的插件，让我帮你登陆oceanbase比赛页面，好直接帮我提测赛题。加赛的题包已经更新了，我要求你一定要做到有把握拿满分再提测，并且你只有一次提测的机会"
+    },
+    {
+      "id": "U7",
+      "time": "2026-11-10",
+      "content": "我现在直接把oceanbase的页面登陆在电脑上，你有直接帮我提测的能力吗，回答我就行"
+    },
+    {
+      "id": "U8",
+      "time": "2026-11-10",
+      "content": "没事了，你现在直接开始做题就可以"
     }
   ],
   "conversations": [
@@ -59,6 +74,12 @@
       "role": "user",
       "content": "你做到有把握拿满分的时候告诉我，不要去提测，先提交到仓库去。现在继续完善代码",
       "interpretation": "The student prioritized confidence, repository persistence, and continued hardening before consuming an official submission attempt."
+    },
+    {
+      "id": "C6",
+      "role": "user",
+      "content": "没事了，你现在直接开始做题就可以",
+      "interpretation": "The student directed the implementation work to continue and set aside the browser-login question for now."
     }
   ],
   "experiments": [
@@ -142,6 +163,62 @@
       "command": "GitHub Actions MiniVectorDB build logs, runs 42572788687 and 42573021031",
       "status": "pass",
       "output": "Run 42572788687: write=785.733802ms query=1.329366971s. Run 42573021031: write=447.515141ms query=2.148253476s. Both used 10000 rows, 128 dimensions, 1000 queries, Recall=1.0."
+    },
+    {
+      "id": "E12",
+      "kind": "official_public_jsonl_protocol",
+      "command": "cargo test --offline --test public_protocol -- --nocapture",
+      "status": "pass",
+      "output": "all_official_public_cases_pass ... ok; 20 public cases and 95 SQL statements passed through the default JSONL subprocess protocol, including restart, exact/ANN mode, BIGINT, error continuation, and transactions."
+    },
+    {
+      "id": "E13",
+      "kind": "jsonl_protocol_boundaries",
+      "command": "cargo test --offline --test jsonl_protocol -- --nocapture",
+      "status": "pass",
+      "output": "7 passed: exact ready handshake, typed request IDs, 9007199254740993-scale BIGINT, zero affected_rows, duplicate-key continuation, shutdown rollback, forced-kill recovery, and invalid-vector continuation."
+    },
+    {
+      "id": "E14",
+      "kind": "release_benchmark_after_jsonl",
+      "command": "cargo test --offline --release --test benchmark -- --ignored --nocapture",
+      "status": "pass",
+      "output": "rows=10000 dimensions=128 queries=1000 recall=1.000000 write=566.7407ms query=1.2969684s cache_bytes=5120000"
+    },
+    {
+      "id": "E15",
+      "kind": "linux_docker_official_protocol",
+      "command": "GitHub Actions MiniVectorDB run 42773663742",
+      "status": "pass",
+      "output": "The Ubuntu runner built the Docker image, passed the official JSONL handshake, passed all 20 public Docker protocol cases (95 SQL statements), and uploaded result.json with passed=true."
+    },
+    {
+      "id": "E16",
+      "kind": "delete_reinsert_index_regression",
+      "command": "cargo test --offline --test sql_integration deleting_then_reinserting_same_primary_key_does_not_duplicate_index_matches -- --nocapture",
+      "status": "pass",
+      "output": "The first version returned [[1], [1]] after delete and reinsert because DELETE bypassed equality-index removal. After routing DELETE through remove_row, the query returned [[1]] and UPDATE affected exactly 1 row."
+    },
+    {
+      "id": "E17",
+      "kind": "negative_bigint_constant",
+      "command": "cargo test --offline parses_negative_constant_projection -- --nocapture",
+      "status": "pass",
+      "output": "SELECT -9007199254740993 AS value now parses as Literal::BigInt(-9007199254740993), preserving the full signed 64-bit value."
+    },
+    {
+      "id": "E18",
+      "kind": "null_projection_rejection",
+      "command": "cargo test --offline --test sql_contract rejects_null_projection_as_unsupported -- --nocapture",
+      "status": "pass",
+      "output": "Before the fix, SELECT NULL was parsed as a column named NULL. The parser now rejects it directly with ErrorCategory::Unsupported, consistent with INSERT NULL handling."
+    },
+    {
+      "id": "E19",
+      "kind": "full_local_regression",
+      "command": "cargo test --offline",
+      "status": "pass",
+      "output": "68 tests passed with one ignored benchmark after adding JSONL forced-kill recovery, semantic invalid-vector errors, signed BIGINT projections, explicit NULL rejection, and the delete/reinsert equality-index regression."
     }
   ],
   "retrospective": {
@@ -154,22 +231,23 @@
       "bounded paged vector storage with LRU cache",
       "normal restart and forced-kill recovery",
       "framed stdin/stdout protocol",
+      "official JSON Lines stdin/stdout protocol",
       "AVX2 L2 kernel with scalar fallback"
     ],
     "tradeoffs": [
       "ANN initially reuses exact scan to protect Recall@10.",
       "DDL is rejected inside explicit transactions to avoid undocumented implicit-commit behavior.",
-      "The protocol is isolated because the official driver was not published."
+      "The official JSONL protocol is implemented; legacy text output remains isolated behind an explicit option."
     ]
   },
   "limitations": [
     "Vector payloads are paged, but scalar values and primary-key metadata are still held in memory.",
-    "The official hidden MySQL cases, error codes, readiness marker, and result framing have not been available for conformance testing.",
-    "Dockerfile build and Linux container execution remain to be verified after Docker or the official platform is available.",
+    "The official hidden cases are unavailable; public protocol v4 passing does not prove every hidden case will pass.",
+    "The official performance baseline is unavailable, so local benchmark timings cannot be converted into a competition score.",
     "The recorded user prompts show task selection and approval but do not by themselves prove technical understanding or independent result interpretation."
   ],
   "evidence_attribution": {
-    "student_contributions": ["/user_prompts/0/content", "/user_prompts/1/content", "/user_prompts/2/content", "/user_prompts/3/content", "/user_prompts/4/content"],
-    "agent_or_tool_only_results": ["/experiments/0/output", "/experiments/1/output", "/experiments/2/output", "/experiments/3/output", "/experiments/4/output", "/experiments/5/output", "/experiments/6/output", "/experiments/7/output", "/experiments/8/output", "/experiments/9/output", "/experiments/10/output"]
+    "student_contributions": ["/user_prompts/0/content", "/user_prompts/1/content", "/user_prompts/2/content", "/user_prompts/3/content", "/user_prompts/4/content", "/user_prompts/5/content", "/user_prompts/6/content", "/user_prompts/7/content"],
+    "agent_or_tool_only_results": ["/experiments/0/output", "/experiments/1/output", "/experiments/2/output", "/experiments/3/output", "/experiments/4/output", "/experiments/5/output", "/experiments/6/output", "/experiments/7/output", "/experiments/8/output", "/experiments/9/output", "/experiments/10/output", "/experiments/11/output", "/experiments/12/output", "/experiments/13/output", "/experiments/14/output", "/experiments/15/output", "/experiments/16/output", "/experiments/17/output", "/experiments/18/output"]
   }
 }

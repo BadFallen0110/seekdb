@@ -8,7 +8,8 @@ Date: 2026-11-10
 cargo test
 ```
 
-Result: pass. The suite covers parser acceptance and rejection, Unicode
+Result: pass, 68 tests plus one explicitly ignored benchmark. The suite covers
+parser acceptance and rejection, Unicode
 `VARCHAR`, finite `float32` vectors, CRUD, filtered TopK, transaction rollback,
 incremental WAL recovery, forced-kill recovery, and TopK tie ordering.
 It also includes a deterministic 240-step transaction model with periodic
@@ -32,7 +33,21 @@ cargo test --test jsonl_protocol
 Result: pass. Focused protocol tests cover JSON string and integer IDs,
 9007199254740993-scale BIGINT values, zero-row mutations,
 `duplicate_key` followed by continued execution, shutdown rollback, and reopening
-the same data directory.
+the same data directory. They also force-kill an open transaction through the
+JSONL process interface, verify committed recovery, and check dimension,
+NaN, and float32-overflow vector errors without terminating the protocol.
+
+```text
+cargo test --test sql_integration deleting_then_reinserting_same_primary_key_does_not_duplicate_index_matches
+```
+
+Result: pass after a regression fix. Before the fix, deleting primary key `1`
+and inserting it again produced duplicate equality-index candidates
+`[[1], [1]]`; `DELETE` now uses the index-maintaining row removal path and the
+query returns `[[1]]`.
+
+`SELECT NULL` and `INSERT ... NULL` are both rejected as unsupported rather
+than being interpreted as an ordinary column name or value.
 
 ```text
 cargo test --release --test benchmark -- --ignored --nocapture

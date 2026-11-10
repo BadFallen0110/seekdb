@@ -190,3 +190,67 @@ fn shutdown_rolls_back_uncommitted_changes_and_reopens_same_data() {
     reopened.shutdown(7.into());
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn forced_kill_recovers_committed_jsonl_writes_and_drops_the_open_transaction() {
+    let (mut harness, directory) = Harness::start();
+    assert_eq!(harness.read(), serde_json::json!({"type": "ready"}));
+    harness.execute(1.into(), "CREATE TABLE docs (id BIGINT PRIMARY KEY);");
+    harness.execute(2.into(), "INSERT INTO docs VALUES (1);");
+    harness.execute(3.into(), "BEGIN;");
+    harness.execute(4.into(), "INSERT INTO docs VALUES (2);");
+    harness.child.kill().unwrap();
+    harness.child.wait().unwrap();
+    drop(harness);
+
+    let mut recovered = Harness::start_at(&directory);
+    assert_eq!(recovered.read(), serde_json::json!({"type": "ready"}));
+    assert_eq!(
+        recovered.execute(5.into(), "SELECT id FROM docs ORDER BY id;"),
+        serde_json::json!({
+            "id": 5,
+            "ok": true,
+            "columns": ["id"],
+            "rows": [[1]]
+        })
+    );
+    recovered.shutdown(6.into());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn invalid_vectors_fail_atomically_and_do_not_stop_the_protocol() {
+    let (mut harness, directory) = Harness::start();
+    assert_eq!(harness.read(), serde_json::json!({"type": "ready"}));
+    harness.execute(
+        1.into(),
+        "CREATE TABLE docs (id BIGINT PRIMARY KEY, embedding VECTOR(2));",
+    );
+    for (id, vector, expected_code) in [
+        (2_u64, "[1]", "dimension_mismatch"),
+        (3, "[NaN,0]", "invalid_vector"),
+        (4, "[1e100,0]", "invalid_vector"),
+    ] {
+        let response = harness.execute(
+            serde_json::json!(id),
+            &format!("INSERT INTO docs VALUES ({id},'{vector}');"),
+        );
+        assert_eq!(response["ok"], serde_json::json!(false));
+        assert_eq!(response["error"]["code"], serde_json::json!(expected_code));
+    }
+    assert_eq!(
+        harness.execute(5.into(), "INSERT INTO docs VALUES (5,'[1,0]');"),
+        serde_json::json!({"id": 5, "ok": true, "affected_rows": 1})
+    );
+    assert_eq!(
+        harness.execute(6.into(), "SELECT id FROM docs;"),
+        serde_json::json!({
+            "id": 6,
+            "ok": true,
+            "columns": ["id"],
+            "rows": [[5]]
+        })
+    );
+    harness.shutdown(7.into());
+    std::fs::remove_dir_all(directory).unwrap();
+}

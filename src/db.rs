@@ -386,7 +386,7 @@ impl Database {
         let keys = matching_keys(self.table(table_name)?, filter.as_ref())?;
         let table = self.table_mut(table_name)?;
         for key in &keys {
-            table.rows.remove(key);
+            table.remove_row(*key);
         }
         if !keys.is_empty() {
             self.pending_mutations.push(storage::Mutation::Delete {

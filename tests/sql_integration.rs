@@ -177,6 +177,29 @@ fn scalar_equality_index_tracks_category_updates_and_deletes() {
 }
 
 #[test]
+fn deleting_then_reinserting_same_primary_key_does_not_duplicate_index_matches() {
+    let mut db = Database::memory();
+    db.execute("CREATE TABLE docs (id BIGINT PRIMARY KEY, category VARCHAR(8))")
+        .unwrap();
+    db.execute("INSERT INTO docs VALUES (1,'same')").unwrap();
+    db.execute("DELETE FROM docs WHERE id=1").unwrap();
+    db.execute("INSERT INTO docs VALUES (1,'same')").unwrap();
+
+    assert_eq!(
+        db.execute("SELECT id FROM docs WHERE category='same'")
+            .unwrap()
+            .rows,
+        vec![vec![Value::BigInt(1)]]
+    );
+    assert_eq!(
+        db.execute("UPDATE docs SET category='updated' WHERE category='same'")
+            .unwrap()
+            .affected,
+        1
+    );
+}
+
+#[test]
 fn order_by_can_use_l2_distance_without_projecting_it() {
     let mut db = sample_db();
     let result = db

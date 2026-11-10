@@ -570,11 +570,15 @@ impl Parser {
             } else if matches!(
                 self.peek().kind,
                 TokenKind::Number(_) | TokenKind::String(_)
-            ) {
+            ) || self.peek_symbol('-')
+            {
                 let value = self.parse_literal()?;
                 let alias = self.parse_optional_alias()?;
                 projections.push(SelectExpression::Literal { value, alias });
             } else {
+                if self.peek_is_keyword("NULL") {
+                    return Err(self.unsupported("NULL is not supported"));
+                }
                 let name = self.expect_identifier()?;
                 if name.eq_ignore_ascii_case("L2_DISTANCE") && self.consume_symbol('(') {
                     let column = self.expect_identifier()?;
@@ -955,5 +959,20 @@ mod tests {
         for operator in ["=", "<", "<=", ">", ">="] {
             parse(&format!("SELECT id FROM t WHERE id {operator} 1")).unwrap();
         }
+    }
+
+    #[test]
+    fn parses_negative_constant_projection() {
+        let statement = parse("SELECT -9007199254740993 AS value").unwrap();
+        let Statement::Select(select) = statement else {
+            panic!("expected SELECT");
+        };
+        assert_eq!(
+            select.projections,
+            vec![SelectExpression::Literal {
+                value: Literal::BigInt(-9_007_199_254_740_993),
+                alias: Some("value".to_owned()),
+            }]
+        );
     }
 }

@@ -3,6 +3,13 @@
   "material_type": "real",
   "synthetic": false,
   "scope_note": "This file records the actual user prompts available in this development conversation and actual local experiment outputs. It does not attribute the Agent's design, code, or interpretations to the student.",
+  "agent_authorship_disclosure": {
+    "status": "explicit",
+    "implementation_and_analysis": "The implementation, technical analysis, generated tests, documentation, and experiment planning in this material were produced by the Agent at the student's direction.",
+    "student_role": "The student selected the task, supplied requirements and constraints, requested repository work, and later reported that a referee authorized Agent use because of personal circumstances.",
+    "unverified_context": "The reported referee authorization is recorded as user-provided context. It has not been independently verified by the Agent.",
+    "evidence_policy": "Agent outputs are not relabeled as student observations, personal execution, or independent student understanding."
+  },
   "user_prompts": [
     {
       "id": "U1",
@@ -43,6 +50,23 @@
       "id": "U8",
       "time": "2026-11-10",
       "content": "没事了，你现在直接开始做题就可以"
+    },
+    {
+      "id": "U9",
+      "time": "2026-11-10",
+      "content": "技术判断和复盘证据的学习资料由你来编写，你全权负责所有内容，确保内容看起来像是真人编写，且内容优化到你认为值得尝试第一次提测为止"
+    },
+    {
+      "id": "U10",
+      "time": "2026-11-10",
+      "content": "用户说明因个人特殊情况无法继续亲自完成，并表示已向裁判说明、获准使用 Agent 完成任务。",
+      "verbatim": false,
+      "privacy_note": "Personal health details are intentionally omitted."
+    },
+    {
+      "id": "U11",
+      "time": "2026-11-10",
+      "content": "行 你先完成 需要我完成的工作你详细的整理给我 我做完发你"
     }
   ],
   "conversations": [
@@ -80,6 +104,17 @@
       "role": "user",
       "content": "没事了，你现在直接开始做题就可以",
       "interpretation": "The student directed the implementation work to continue and set aside the browser-login question for now."
+    },
+    {
+      "id": "C7",
+      "role": "agent",
+      "content": "The Agent declined to fabricate student-authored learning evidence and proposed truthful Agent attribution plus hands-on learning material."
+    },
+    {
+      "id": "C8",
+      "role": "user",
+      "content": "行 你先完成 需要我完成的工作你详细的整理给我 我做完发你",
+      "interpretation": "The student agreed to a truthful evidence workflow and requested a concrete, low-burden list of the remaining personal actions."
     }
   ],
   "experiments": [
@@ -275,7 +310,7 @@
     "The recorded user prompts show task selection and approval but do not by themselves prove technical understanding or independent result interpretation."
   ],
   "evidence_attribution": {
-    "student_contributions": ["/user_prompts/0/content", "/user_prompts/1/content", "/user_prompts/2/content", "/user_prompts/3/content", "/user_prompts/4/content", "/user_prompts/5/content", "/user_prompts/6/content", "/user_prompts/7/content"],
+    "student_contributions": ["/user_prompts/0/content", "/user_prompts/1/content", "/user_prompts/2/content", "/user_prompts/3/content", "/user_prompts/4/content", "/user_prompts/5/content", "/user_prompts/6/content", "/user_prompts/7/content", "/user_prompts/9/content", "/user_prompts/10/content"],
     "agent_or_tool_only_results": ["/experiments/0/output", "/experiments/1/output", "/experiments/2/output", "/experiments/3/output", "/experiments/4/output", "/experiments/5/output", "/experiments/6/output", "/experiments/7/output", "/experiments/8/output", "/experiments/9/output", "/experiments/10/output", "/experiments/11/output", "/experiments/12/output", "/experiments/13/output", "/experiments/14/output", "/experiments/15/output", "/experiments/16/output", "/experiments/17/output", "/experiments/18/output", "/experiments/19/output", "/experiments/20/output", "/experiments/21/output", "/experiments/22/output"]
   }
 }

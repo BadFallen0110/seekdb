@@ -8,7 +8,7 @@ Date: 2026-11-10
 cargo test
 ```
 
-Result: pass, 68 tests plus one explicitly ignored benchmark. The suite covers
+Result: pass, 70 tests plus one explicitly ignored benchmark. The suite covers
 parser acceptance and rejection, Unicode
 `VARCHAR`, finite `float32` vectors, CRUD, filtered TopK, transaction rollback,
 incremental WAL recovery, forced-kill recovery, and TopK tie ordering.
@@ -48,6 +48,17 @@ query returns `[[1]]`.
 
 `SELECT NULL` and `INSERT ... NULL` are both rejected as unsupported rather
 than being interpreted as an ordinary column name or value.
+
+Vector payload appends are batched at the row-batch and WAL-replay levels.
+The persistent benchmark after this change produced:
+
+```text
+rows=10000 dimensions=128 queries=1000 recall=1.000000 write=445.7862ms query=1.3043352s cache_bytes=6151232
+```
+
+The prior non-batched local run on the same machine was approximately
+`write=484.4624ms query=1.2972755s`. The write improvement is a local regression
+signal; official cgroup measurements remain authoritative.
 
 ```text
 cargo test --release --test benchmark -- --ignored --nocapture

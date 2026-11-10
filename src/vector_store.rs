@@ -41,6 +41,17 @@ impl VectorStore {
         }
     }
 
+    pub fn append_batch(&mut self, values: &[Vec<f32>]) -> Result<Vec<u64>, DbError> {
+        match &mut self.backend {
+            Backend::Memory(vectors) => {
+                let start = vectors.len() as u64;
+                vectors.extend(values.iter().cloned());
+                Ok((start..start + values.len() as u64).collect())
+            }
+            Backend::Paged(store) => store.append_batch(values),
+        }
+    }
+
     pub fn read(&mut self, handle: u64) -> Result<Vec<f32>, DbError> {
         match &mut self.backend {
             Backend::Memory(vectors) => vectors
@@ -162,33 +173,60 @@ impl PagedStore {
     }
 
     fn append(&mut self, values: &[f32]) -> Result<u64, DbError> {
-        let length = u32::try_from(values.len()).map_err(|_| {
-            DbError::new(
-                ErrorCategory::Range,
-                "VECTOR dimension does not fit in the storage format",
-            )
-        })?;
-        let handle = self.offsets.len() as u64;
-        let record_offset = self.end;
-        self.file.seek(SeekFrom::Start(record_offset))?;
+        Ok(self
+            .append_batch(std::slice::from_ref(&values.to_vec()))?
+            .into_iter()
+            .next()
+            .expect("one batch input produced one handle"))
+    }
+
+    fn append_batch(&mut self, values: &[Vec<f32>]) -> Result<Vec<u64>, DbError> {
+        if values.is_empty() {
+            return Ok(Vec::new());
+        }
+        let first_handle = self.offsets.len() as u64;
+        let batch_offset = self.end;
+        let mut record_offsets = Vec::with_capacity(values.len());
         let mut encoded = std::mem::take(&mut self.append_scratch);
         encoded.clear();
-        encoded.extend_from_slice(&length.to_le_bytes());
-        encoded.reserve(std::mem::size_of_val(values));
-        for value in values {
-            encoded.extend_from_slice(&value.to_le_bytes());
+        for values in values {
+            let length = u32::try_from(values.len()).map_err(|_| {
+                DbError::new(
+                    ErrorCategory::Range,
+                    "VECTOR dimension does not fit in the storage format",
+                )
+            })?;
+            let record_offset = self.end.checked_add(encoded.len() as u64).ok_or_else(|| {
+                DbError::new(ErrorCategory::Range, "VECTOR storage offset overflow")
+            })?;
+            record_offsets.push(record_offset);
+            encoded.extend_from_slice(&length.to_le_bytes());
+            encoded.reserve(std::mem::size_of_val(values.as_slice()));
+            for value in values {
+                encoded.extend_from_slice(&value.to_le_bytes());
+            }
         }
+        self.file.seek(SeekFrom::Start(batch_offset))?;
         let write_result = self.file.write_all(&encoded);
+        let encoded_length = encoded.len() as u64;
         self.append_scratch = encoded;
         write_result?;
+        if record_offsets
+            .iter()
+            .any(|offset| *offset >= batch_offset + encoded_length)
+        {
+            return Err(DbError::new(
+                ErrorCategory::Corruption,
+                "VECTOR batch offsets exceed encoded batch",
+            ));
+        }
         self.end = self
             .end
-            .checked_add(4 + u64::from(length) * 4)
+            .checked_add(encoded_length)
             .ok_or_else(|| DbError::new(ErrorCategory::Range, "VECTOR storage offset overflow"))?;
-        self.offsets.push(record_offset);
-        self.cache.invalidate_from(record_offset);
-        self.vector_cache.insert(handle, values.to_vec());
-        Ok(handle)
+        self.offsets.extend(record_offsets);
+        self.cache.invalidate_from(batch_offset);
+        Ok((first_handle..first_handle + values.len() as u64).collect())
     }
 
     fn read(&mut self, handle: u64) -> Result<Vec<f32>, DbError> {

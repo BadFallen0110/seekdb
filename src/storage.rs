@@ -297,6 +297,7 @@ pub fn apply_mutations(
                 tables.remove(name);
             }
             Mutation::Upsert { table, rows } => {
+                let rows = materialize_rows(rows, vectors)?;
                 let table = tables.get_mut(table).ok_or_else(|| {
                     DbError::new(
                         ErrorCategory::TableNotFound,
@@ -304,7 +305,7 @@ pub fn apply_mutations(
                     )
                 })?;
                 for (key, row) in rows {
-                    table.replace_row(*key, materialize_row(row, vectors)?);
+                    table.replace_row(key, row);
                 }
             }
             Mutation::Delete { table, keys } => {
@@ -419,6 +420,39 @@ fn materialize_row(row: &[Value], vectors: &mut VectorStore) -> Result<Vec<Value
             other => Ok(other.clone()),
         })
         .collect()
+}
+
+fn materialize_rows(
+    rows: &[(i64, Vec<Value>)],
+    vectors: &mut VectorStore,
+) -> Result<Vec<(i64, Vec<Value>)>, DbError> {
+    let mut positions = Vec::new();
+    let mut vector_batch = Vec::new();
+    let mut materialized = Vec::with_capacity(rows.len());
+    for (row_index, (key, row)) in rows.iter().enumerate() {
+        let mut row = row.clone();
+        for (value_index, value) in row.iter_mut().enumerate() {
+            match value {
+                Value::Vector(values) => {
+                    positions.push((row_index, value_index));
+                    vector_batch.push(std::mem::take(values));
+                }
+                Value::VectorRef(_) => {
+                    return Err(corruption(
+                        "WAL contains a VECTOR reference instead of committed VECTOR data",
+                    ));
+                }
+                _ => {}
+            }
+        }
+        materialized.push((*key, row));
+    }
+    let mut handles = vectors.append_batch(&vector_batch)?.into_iter();
+    for (row_index, value_index) in positions {
+        materialized[row_index].1[value_index] =
+            Value::VectorRef(handles.next().expect("one handle per VECTOR value"));
+    }
+    Ok(materialized)
 }
 
 fn encode_schema(writer: &mut Vec<u8>, schema: &TableSchema) {

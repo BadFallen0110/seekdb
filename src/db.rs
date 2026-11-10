@@ -301,6 +301,7 @@ impl Database {
                 .map(|row| schema.decode_row(row))
                 .collect::<Result<Vec<_>, _>>()?
         };
+        self.validate_insert_keys(table_name, &prepared)?;
         let mut prepared = prepared;
         let mutation_rows = prepared
             .iter()
@@ -313,9 +314,8 @@ impl Database {
                 )
             })
             .collect::<Vec<_>>();
-        for row in &mut prepared {
-            self.materialize_row_for_storage(row)?;
-        }
+        let mut prepared_rows = prepared.iter_mut().collect::<Vec<_>>();
+        self.materialize_rows_for_storage(&mut prepared_rows)?;
         let table = self.table_mut(table_name)?;
         let affected = table.insert_prepared(prepared)?;
         self.pending_mutations.push(storage::Mutation::Upsert {
@@ -357,9 +357,13 @@ impl Database {
                 row[*index] = value.clone();
             }
             persisted_replacements.push((*key, self.hydrate_row(&row)?));
-            self.materialize_row_for_storage(&mut row)?;
             replacements.push((*key, row));
         }
+        let mut replacement_rows = replacements
+            .iter_mut()
+            .map(|(_, row)| row)
+            .collect::<Vec<_>>();
+        self.materialize_rows_for_storage(&mut replacement_rows)?;
         {
             let table = self.table_mut(table_name)?;
             for (key, row) in &replacements {
@@ -658,6 +662,22 @@ impl Database {
         })
     }
 
+    fn validate_insert_keys(&self, table_name: &str, rows: &[Row]) -> Result<(), DbError> {
+        let table = self.table(table_name)?;
+        let mut pending = HashSet::with_capacity(rows.len());
+        for row in rows {
+            let key = row[table.schema.primary_key_index]
+                .as_bigint()
+                .ok_or_else(|| {
+                    DbError::new(ErrorCategory::TypeMismatch, "primary key must be BIGINT")
+                })?;
+            if table.rows.contains_key(&key) || !pending.insert(key) {
+                return Err(DbError::duplicate_key(table_name));
+            }
+        }
+        Ok(())
+    }
+
     fn reject_ddl_in_transaction(&self, operation: &str) -> Result<(), DbError> {
         if self.transaction_backup.is_some() {
             return Err(DbError::new(
@@ -776,11 +796,21 @@ impl Database {
         Ok(())
     }
 
-    fn materialize_row_for_storage(&mut self, row: &mut Row) -> Result<(), DbError> {
-        for value in row {
-            if let Value::Vector(values) = value {
-                *value = Value::VectorRef(self.vectors.append(values)?);
+    fn materialize_rows_for_storage(&mut self, rows: &mut [&mut Row]) -> Result<(), DbError> {
+        let mut positions = Vec::new();
+        let mut vectors = Vec::new();
+        for (row_index, row) in rows.iter_mut().enumerate() {
+            for (value_index, value) in row.iter_mut().enumerate() {
+                if let Value::Vector(values) = value {
+                    positions.push((row_index, value_index));
+                    vectors.push(std::mem::take(values));
+                }
             }
+        }
+        let mut handles = self.vectors.append_batch(&vectors)?.into_iter();
+        for (row_index, value_index) in positions {
+            rows[row_index][value_index] =
+                Value::VectorRef(handles.next().expect("one handle per VECTOR value"));
         }
         Ok(())
     }

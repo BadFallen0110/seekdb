@@ -85,6 +85,32 @@ fn recovery_replays_ddl_upserts_and_deletes_in_order() {
 }
 
 #[test]
+fn failed_duplicate_vector_inserts_do_not_append_orphan_payloads() {
+    let directory = unique_dir();
+    let mut database = Database::open(&directory).unwrap();
+    database
+        .execute("CREATE TABLE docs (id BIGINT PRIMARY KEY, embedding VECTOR(2))")
+        .unwrap();
+    database
+        .execute("INSERT INTO docs VALUES (1,'[1,0]')")
+        .unwrap();
+    let vector_file = directory.join("vectors.bin");
+    let before = std::fs::metadata(&vector_file).unwrap().len();
+    for _ in 0..10 {
+        assert_eq!(
+            database
+                .execute("INSERT INTO docs VALUES (1,'[0,1]')")
+                .unwrap_err()
+                .category(),
+            ErrorCategory::DuplicateKey
+        );
+    }
+    assert_eq!(std::fs::metadata(&vector_file).unwrap().len(), before);
+    database.close().unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn vector_rows_use_the_bounded_page_store() {
     let directory = unique_dir();
     let mut database = Database::open_with_cache_limit(&directory, 64 * 1024).unwrap();

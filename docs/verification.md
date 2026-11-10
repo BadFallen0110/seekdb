@@ -131,10 +131,10 @@ two `database` rows in distance order, and restored all three rows after
 ## Container verification
 
 GitHub Actions run
-[42573405545](https://github.com/BadFallen0110/seekdb/actions/runs/42573405545)
+[42775049494](https://github.com/BadFallen0110/seekdb/actions/runs/42775049494)
 successfully built the Dockerfile, ran the full Rust test suite inside the
-Linux build stage, started the resulting container with stdin only, and matched
-the expected SQL smoke output.
+Linux build stage, passed the official JSONL handshake, passed all 20 public
+Docker protocol cases, and uploaded `result.json` with `passed=true`.
 
 Two successive Linux builder runs produced:
 

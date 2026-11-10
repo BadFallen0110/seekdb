@@ -1,8 +1,10 @@
 use std::io::{BufRead, Write};
 
+use serde_json::{Map, Number, Value as JsonValue, json};
+
 use crate::db::{Database, QueryResult};
 use crate::error::{DbError, ErrorCategory};
-use crate::sql::{QueryMode, parse};
+use crate::sql::{QueryMode, Statement, parse};
 use crate::value::Value;
 
 pub struct ProtocolConfig {
@@ -12,6 +14,7 @@ pub struct ProtocolConfig {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OutputFormat {
+    Jsonl,
     Framed,
     Tsv,
     Mysql,
@@ -23,6 +26,232 @@ impl Default for ProtocolConfig {
             ready_marker: "READY".to_owned(),
             output_format: OutputFormat::Tsv,
         }
+    }
+}
+
+pub fn run_jsonl<R: BufRead, W: Write>(
+    database: &mut Database,
+    reader: R,
+    mut writer: W,
+) -> Result<(), DbError> {
+    write_json_response(&mut writer, &json!({"type": "ready"}))?;
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let request = match serde_json::from_str::<JsonValue>(&line) {
+            Ok(JsonValue::Object(request)) => request,
+            Ok(_) => {
+                write_json_response(
+                    &mut writer,
+                    &json_error(
+                        JsonValue::Null,
+                        "invalid_request",
+                        "request must be a JSON object",
+                    ),
+                )?;
+                continue;
+            }
+            Err(error) => {
+                write_json_response(
+                    &mut writer,
+                    &json_error(JsonValue::Null, "invalid_json", error.to_string()),
+                )?;
+                continue;
+            }
+        };
+        let id = request.get("id").cloned().unwrap_or(JsonValue::Null);
+        let operation = request.get("op").and_then(JsonValue::as_str);
+        match operation {
+            Some("shutdown") => {
+                database.close()?;
+                write_json_response(&mut writer, &json_ok(id))?;
+                return Ok(());
+            }
+            Some("execute") => {
+                let Some(sql) = request.get("sql").and_then(JsonValue::as_str) else {
+                    write_json_response(
+                        &mut writer,
+                        &json_error(id, "invalid_request", "execute requires a string sql field"),
+                    )?;
+                    continue;
+                };
+                let mode = match request
+                    .get("search_mode")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or("exact")
+                    .to_ascii_lowercase()
+                    .as_str()
+                {
+                    "exact" => QueryMode::Exact,
+                    "ann" => QueryMode::Ann,
+                    _ => {
+                        write_json_response(
+                            &mut writer,
+                            &json_error(
+                                id,
+                                "invalid_search_mode",
+                                "search_mode must be `exact` or `ann`",
+                            ),
+                        )?;
+                        continue;
+                    }
+                };
+
+                let statement = match parse(sql) {
+                    Ok(statement) => statement,
+                    Err(error) => {
+                        write_json_response(&mut writer, &json_database_error(id, &error))?;
+                        continue;
+                    }
+                };
+                database.set_query_mode(mode);
+                match database.execute(sql) {
+                    Ok(result) => {
+                        let response = json_query_result(id, result, is_mutation(&statement));
+                        write_json_response(&mut writer, &response)?;
+                    }
+                    Err(error) => {
+                        write_json_response(&mut writer, &json_database_error(id, &error))?;
+                    }
+                }
+            }
+            Some(operation) => {
+                write_json_response(
+                    &mut writer,
+                    &json_error(
+                        id,
+                        "unsupported_operation",
+                        format!("unsupported operation `{operation}`"),
+                    ),
+                )?;
+            }
+            None => {
+                write_json_response(
+                    &mut writer,
+                    &json_error(id, "invalid_request", "request requires a string op field"),
+                )?;
+            }
+        }
+    }
+
+    database.close()
+}
+
+fn json_ok(id: JsonValue) -> JsonValue {
+    let mut response = Map::new();
+    response.insert("id".to_owned(), id);
+    response.insert("ok".to_owned(), JsonValue::Bool(true));
+    JsonValue::Object(response)
+}
+
+fn json_error(id: JsonValue, code: impl AsRef<str>, message: impl Into<String>) -> JsonValue {
+    let mut response = Map::new();
+    response.insert("id".to_owned(), id);
+    response.insert("ok".to_owned(), JsonValue::Bool(false));
+    response.insert(
+        "error".to_owned(),
+        json!({"code": code.as_ref(), "message": message.into()}),
+    );
+    JsonValue::Object(response)
+}
+
+fn json_database_error(id: JsonValue, error: &DbError) -> JsonValue {
+    json_error(id, semantic_error_code(error), error.to_string())
+}
+
+fn json_query_result(id: JsonValue, result: QueryResult, mutation: bool) -> JsonValue {
+    if mutation {
+        let mut response = json_ok(id);
+        response
+            .as_object_mut()
+            .expect("constructed object")
+            .insert(
+                "affected_rows".to_owned(),
+                JsonValue::Number(Number::from(result.affected)),
+            );
+        return response;
+    }
+    if result.columns.is_empty() {
+        return json_ok(id);
+    }
+
+    let mut response = json_ok(id);
+    let object = response.as_object_mut().expect("constructed object");
+    object.insert(
+        "columns".to_owned(),
+        JsonValue::Array(result.columns.into_iter().map(JsonValue::String).collect()),
+    );
+    object.insert(
+        "rows".to_owned(),
+        JsonValue::Array(
+            result
+                .rows
+                .into_iter()
+                .map(|row| JsonValue::Array(row.iter().map(json_value).collect()))
+                .collect(),
+        ),
+    );
+    response
+}
+
+fn json_value(value: &Value) -> JsonValue {
+    match value {
+        Value::BigInt(value) => JsonValue::Number(Number::from(*value)),
+        Value::Float(value) => Number::from_f64(*value)
+            .map(JsonValue::Number)
+            .unwrap_or(JsonValue::Null),
+        Value::Varchar(value) => JsonValue::String(value.clone()),
+        Value::Vector(values) => JsonValue::Array(
+            values
+                .iter()
+                .map(|value| {
+                    Number::from_f64(f64::from(*value))
+                        .map(JsonValue::Number)
+                        .unwrap_or(JsonValue::Null)
+                })
+                .collect(),
+        ),
+        Value::VectorRef(handle) => JsonValue::String(format!("<vector:{handle}>")),
+    }
+}
+
+fn write_json_response(writer: &mut impl Write, response: &JsonValue) -> Result<(), DbError> {
+    serde_json::to_writer(&mut *writer, response)
+        .map_err(|error| DbError::new(ErrorCategory::Io, error.to_string()))?;
+    writer.write_all(b"\n")?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn is_mutation(statement: &Statement) -> bool {
+    matches!(
+        statement,
+        Statement::Insert { .. } | Statement::Update { .. } | Statement::Delete { .. }
+    )
+}
+
+fn semantic_error_code(error: &DbError) -> &'static str {
+    match error.category() {
+        ErrorCategory::Syntax => "syntax_error",
+        ErrorCategory::Unsupported => "unsupported_sql",
+        ErrorCategory::TableNotFound => "table_not_found",
+        ErrorCategory::TableExists => "table_exists",
+        ErrorCategory::ColumnNotFound => "column_not_found",
+        ErrorCategory::TypeMismatch
+            if error.to_string().to_ascii_lowercase().contains("vector")
+                && error.to_string().to_ascii_lowercase().contains("dimension") =>
+        {
+            "dimension_mismatch"
+        }
+        ErrorCategory::TypeMismatch => "type_mismatch",
+        ErrorCategory::Range => "range_error",
+        ErrorCategory::DuplicateKey => "duplicate_key",
+        ErrorCategory::Transaction => "transaction_error",
+        ErrorCategory::Io => "io_error",
+        ErrorCategory::Corruption => "corruption",
     }
 }
 
@@ -213,6 +442,10 @@ fn write_result(
     format: OutputFormat,
 ) -> Result<(), DbError> {
     match format {
+        OutputFormat::Jsonl => Err(DbError::new(
+            ErrorCategory::Io,
+            "JSON Lines output requires the JSONL protocol loop",
+        )),
         OutputFormat::Framed => write_framed_result(writer, result),
         OutputFormat::Tsv => write_tsv_result(writer, result),
         OutputFormat::Mysql => write_mysql_result(writer, result),
@@ -341,6 +574,18 @@ fn write_error(
     format: OutputFormat,
 ) -> Result<(), DbError> {
     match format {
+        OutputFormat::Jsonl => {
+            serde_json::to_writer(
+                &mut *writer,
+                &json_error(
+                    JsonValue::Null,
+                    semantic_error_code(error),
+                    error.to_string(),
+                ),
+            )
+            .map_err(|error| DbError::new(ErrorCategory::Io, error.to_string()))?;
+            writeln!(writer)?;
+        }
         OutputFormat::Framed | OutputFormat::Tsv => {
             writeln!(
                 writer,

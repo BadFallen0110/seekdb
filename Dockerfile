@@ -5,6 +5,7 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY tests ./tests
+COPY mysqltest ./mysqltest
 
 RUN cargo test --locked \
     && cargo test --release --locked --test benchmark -- --ignored --nocapture \

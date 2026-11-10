@@ -1,6 +1,6 @@
 # Verification Record
 
-Date: 2026-11-09
+Date: 2026-11-10
 
 ## Current checks
 
@@ -14,6 +14,25 @@ incremental WAL recovery, forced-kill recovery, and TopK tie ordering.
 It also includes a deterministic 240-step transaction model with periodic
 restarts, scalar-index maintenance checks, common mysql-test setup statements,
 direct `ORDER BY L2_DISTANCE(...)`, and protocol output-mode tests.
+
+```text
+cargo test --test public_protocol
+```
+
+Result: pass. The official public v4 manifest contains 20 cases and 95 SQL
+statements. The test drives the real binary through JSON Lines, checks startup
+readiness before input, preserves typed request IDs, verifies BIGINT precision,
+applies exact/ANN mode per request, reuses the data directory across restarts,
+checks semantic error codes, and validates all published result rows.
+
+```text
+cargo test --test jsonl_protocol
+```
+
+Result: pass. Focused protocol tests cover JSON string and integer IDs,
+9007199254740993-scale BIGINT values, zero-row mutations,
+`duplicate_key` followed by continued execution, shutdown rollback, and reopening
+the same data directory.
 
 ```text
 cargo test --release --test benchmark -- --ignored --nocapture
@@ -69,7 +88,7 @@ two `database` rows in distance order, and restored all three rows after
 
 ## Pending verification
 
-- Official hidden MySQL-case pack and exact stdout protocol
+- Official hidden cases
 - Platform measurements for wall time, physical I/O, and cgroup peak memory
 - Bounded storage for extremely large scalar-row sets; vector payloads are
   already paged

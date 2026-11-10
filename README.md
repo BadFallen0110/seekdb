@@ -1,15 +1,20 @@
 # MiniVectorDB
 
 MiniVectorDB is a single-process, single-client vector database for the 2026
-OceanBase competition playoff. The database reads SQL from standard input,
-writes deterministic framed results to standard output, and persists committed
-transactions below `/data`.
+OceanBase competition playoff. The database speaks the official JSON Lines
+protocol over standard input/output and persists committed transactions below
+`/data`.
 
 ## Build and run
 
 ```bash
 cargo build --release
-printf 'CREATE TABLE docs (id BIGINT PRIMARY KEY, body VARCHAR(32), embedding VECTOR(2));\nINSERT INTO docs VALUES (1, '\''first'\'', '\''[1,0]'\'');\nSELECT id, L2_DISTANCE(embedding, '\''[1,0]'\'') AS d FROM docs ORDER BY d LIMIT 1;\nQUIT;\n' | target/release/minivectordb --data-dir ./data
+printf '%s\n' \
+  '{"id":1,"op":"execute","sql":"CREATE TABLE docs (id BIGINT PRIMARY KEY, body VARCHAR(32), embedding VECTOR(2));","search_mode":"exact"}' \
+  '{"id":2,"op":"execute","sql":"INSERT INTO docs VALUES (1, '\''first'\'', '\''[1,0]'\'');","search_mode":"exact"}' \
+  '{"id":3,"op":"execute","sql":"SELECT id, L2_DISTANCE(embedding, '\''[1,0]'\'') AS d FROM docs ORDER BY d LIMIT 1;","search_mode":"exact"}' \
+  '{"id":4,"op":"shutdown"}' |
+  target/release/minivectordb --data-dir ./data
 ```
 
 Docker:
@@ -31,18 +36,20 @@ The process does not listen on a network port. Use `-i` rather than `-d` or
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--data-dir PATH` | `/data` | Durable data directory |
-| `--ready TEXT` | `READY` | Startup marker written to stdout |
+| `--protocol jsonl\|text` | `jsonl` | Official JSONL or legacy text adapter |
 | `--mode exact\|ann` | `exact` | Vector query mode |
-| `--output framed\|tsv\|mysql` | `tsv` | Result framing format |
+| `--output jsonl\|framed\|tsv\|mysql` | `jsonl` | Result framing format |
+| `--ready TEXT` | `READY` | Legacy text-mode startup marker |
 | `--cache-bytes N` | 64 MiB | Vector page/value cache budget |
 | `--exact` / `--ann` | `--exact` | Shorthand for query mode |
-| `--no-ready` | off | Suppress the startup marker |
+| `--no-ready` | off | Suppress the legacy startup marker |
 
 Equivalent environment variables are `MINIVECTORDB_DATA_DIR`,
-`MINIVECTORDB_READY`, `MINIVECTORDB_QUERY_MODE`, and `MINIVECTORDB_OUTPUT`. A
-SQL comment containing `mode=ann` or `mode=exact` overrides the query mode for
-subsequent statements. In the first implementation, `ann` deliberately uses
-exact scanning so its Recall@10 remains 1.0.
+`MINIVECTORDB_PROTOCOL`, `MINIVECTORDB_READY`,
+`MINIVECTORDB_QUERY_MODE`, and `MINIVECTORDB_OUTPUT`. JSONL requests set mode
+per request with `search_mode`. The legacy text adapter also accepts SQL comment
+hints containing `mode=ann` or `mode=exact`. In this implementation, `ann`
+deliberately uses exact scanning so its Recall@10 remains 1.0.
 
 `MINIVECTORDB_CACHE_BYTES` controls the vector page/value cache budget. Its
 default is 64 MiB. Vector payloads use 64 KiB pages and a bounded LRU cache;
@@ -113,37 +120,32 @@ rebuildable page store derived from committed WAL records.
 - An incomplete final frame is ignored on recovery.
 - Explicit transactions remain in memory until `COMMIT`; a forced process
   termination therefore discards them.
-- Recovery completes before `READY` is emitted.
+- Recovery completes before the JSONL `{"type":"ready"}` line is emitted.
 - The vector file is rebuilt from committed WAL before readiness, so an
   interrupted vector-file update cannot expose partial data.
-- `QUIT`, `EXIT`, `SHUTDOWN`, and `\q` roll back an open transaction, flush
-  committed state, and exit.
+- JSONL `{"op":"shutdown"}` rolls back an open transaction, flushes committed
+  state, sends one success response, and exits with status 0. The legacy text
+  adapter also accepts `QUIT`, `EXIT`, `SHUTDOWN`, and `\q`.
 
 ## Protocol
 
-The explicit framed adapter (`--output framed`) emits:
+The default protocol is one JSON object per physical line. Startup emits exactly:
 
-```text
-READY
-BEGIN_RESULT
-COLUMNS	id	d
-ROW	1	0
-END_RESULT
-AFFECTED	1
-OK
-ERROR	1201	TYPE_MISMATCH	mismatched type
+```json
+{"type":"ready"}
 ```
 
-Default `--output tsv` emits a header row and tab-separated rows suitable for
-mysql-batch-style parsing. `--output mysql` emits an ASCII table and
-`Query OK` statuses. Input accepts semicolon boundaries plus single-line SQL
-without a trailing semicolon.
+Requests preserve the original JSON `id` type. Queries return ordered `columns`
+and a two-dimensional `rows` array. `INSERT`, `UPDATE`, and `DELETE` return
+`affected_rows`, including zero. SQL failures return `ok:false` with a stable
+semantic error code and do not stop the process. BIGINT values remain JSON
+integers, so values outside JavaScript's safe-integer range retain full `i64`
+precision.
 
-Fields use backslash escapes for tab, carriage return, newline, and backslash.
-Every response is flushed immediately. Diagnostics go to stderr. The official
-protocol is not published, so all readiness, framing, error-code, mode, and exit
-decisions are isolated in `src/protocol.rs`; see
-`docs/protocol-adapter.md`.
+Every response is flushed immediately, diagnostics go to stderr, and shutdown
+emits no output after its response. The complete contract is in
+[`STDIO_PROTOCOL.md`](STDIO_PROTOCOL.md). Legacy human-readable adapters remain
+available with `--output framed`, `--output tsv`, or `--output mysql`.
 
 ## Verification
 
@@ -154,6 +156,11 @@ cargo test
 cargo test --release --test benchmark -- --ignored --nocapture
 ```
 
+`tests/public_protocol.rs` runs all 20 public cases and 95 SQL statements
+through the JSONL process protocol, including restart and mode changes. The
+repository also contains the official `protocol_check/` and `mysqltest/`
+packages for Linux/Docker verification.
+
 The benchmark uses 10,000 rows, 128 dimensions, 1,000 TopK queries, K=10, and
 an independent brute-force oracle. It currently reports Recall@10 = 1.0.
 See `docs/design.md` for durable layout, transaction, recovery, and resource
@@ -161,8 +168,8 @@ tradeoffs.
 
 ## Known limitations
 
-- The official hidden MySQL-case pack and baseline were not available during
-  implementation; the adapter is intentionally isolated for later alignment.
+- The official hidden cases and performance baseline are not published. Public
+  protocol v4 conformance does not prove every hidden case will pass.
 - Vector payloads use a bounded cache, but scalar values and primary-key
   metadata are still held in memory. Extremely large scalar-row sets can still
   exceed a tight memory budget.

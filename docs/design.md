@@ -2,10 +2,11 @@
 
 ## Runtime Shape
 
-MiniVectorDB is one foreground Linux x86_64 process. It reads SQL from stdin,
-writes responses to stdout, emits fatal diagnostics to stderr, and keeps no
-network listener. The Docker command uses `--data-dir /data`; all persisted
-and derived data remains below that directory.
+MiniVectorDB is one foreground Linux x86_64 process. It reads JSON Lines
+requests from stdin, writes one JSON response line per request to stdout,
+emits diagnostics to stderr, and keeps no network listener. The Docker command
+uses `--data-dir /data`; all persisted and derived data remains below that
+directory.
 
 ## Modules
 
@@ -19,8 +20,9 @@ and derived data remains below that directory.
 - `storage.rs` implements checksummed incremental WAL and state replay.
 - `vector_store.rs` implements contiguous vector slots, 64 KiB page reads,
   LRU caches, and AVX2-friendly vector retrieval.
-- `protocol.rs` owns stdin framing, output formats, readiness, errors, and
-  lifecycle commands.
+- `protocol.rs` owns official JSONL framing, request IDs, output values,
+  semantic errors, readiness, and lifecycle commands. It also retains a legacy
+  human-readable text adapter selected explicitly with `--output`.
 
 ## Durable Files
 
@@ -89,6 +91,6 @@ using the same distance/primary-key ordering.
 4. Append committed vector payloads into a temporary page file.
 5. Atomically replace the previous derived vector file.
 6. Open the final page file and establish slot offsets.
-7. Emit readiness.
+7. Emit the exact JSONL readiness object.
 
 No ready marker is emitted before recovery completes.

@@ -21,18 +21,24 @@ jobs:
       - name: Build image
         run: docker build --tag minivectordb:ci .
 
-      - name: Run SQL smoke test
+      - name: Check official JSONL handshake
+        run: |
+          python3 protocol_check/run.py \
+            --image minivectordb:ci \
+            --handshake-only \
+            --output protocol-results/handshake
+
+      - name: Run official public protocol cases
         shell: bash
         run: |
           set -euo pipefail
-          output="$(
-            printf '%s\n' \
-              "CREATE TABLE docs (id BIGINT PRIMARY KEY, body VARCHAR(16), embedding VECTOR(2));" \
-              "INSERT INTO docs VALUES (2,'second','[0,1]'),(1,'first','[1,0]');" \
-              "SELECT id, body, L2_DISTANCE(embedding,'[1,0]') AS d FROM docs ORDER BY d LIMIT 2;" \
-              "QUIT;" |
-              docker run --rm -i --cpus=2 --memory=2g minivectordb:ci --output framed
-          )"
-          printf '%s\n' "$output"
-          grep -F "ROW	1	first	0" <<<"$output"
-          grep -F "ROW	2	second	1" <<<"$output"
+          python3 protocol_check/run.py \
+            --image minivectordb:ci \
+            --output protocol-results/public
+
+      - name: Preserve protocol reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-results
+          path: protocol-results

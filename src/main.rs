@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use minivectordb::db::Database;
-use minivectordb::protocol::{OutputFormat, ProtocolConfig, run};
+use minivectordb::protocol::{OutputFormat, ProtocolConfig, run, run_jsonl};
 use minivectordb::sql::QueryMode;
 
 fn main() -> ExitCode {
@@ -22,7 +22,8 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
         PathBuf::from(env::var("MINIVECTORDB_DATA_DIR").unwrap_or_else(|_| "/data".to_owned()));
     let mut ready_marker = env::var("MINIVECTORDB_READY").unwrap_or_else(|_| "READY".to_owned());
     let mut mode = env::var("MINIVECTORDB_QUERY_MODE").ok();
-    let mut output_format = env::var("MINIVECTORDB_OUTPUT").unwrap_or_else(|_| "tsv".to_owned());
+    let mut output_format = env::var("MINIVECTORDB_OUTPUT").ok();
+    let mut protocol = env::var("MINIVECTORDB_PROTOCOL").ok();
     let mut cache_limit = None;
 
     let mut arguments = env::args().skip(1);
@@ -40,15 +41,22 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
         if let Some(value) = argument.strip_prefix("--output=") {
-            output_format = value.to_owned();
+            output_format = Some(value.to_owned());
             continue;
         }
         if let Some(value) = argument
             .strip_prefix("--format=")
-            .or_else(|| argument.strip_prefix("--protocol="))
             .or_else(|| argument.strip_prefix("--result-format="))
         {
-            output_format = value.to_owned();
+            output_format = Some(value.to_owned());
+            continue;
+        }
+        if let Some(value) = argument.strip_prefix("--protocol=") {
+            if value.eq_ignore_ascii_case("text") {
+                output_format.get_or_insert_with(|| "tsv".to_owned());
+            } else {
+                protocol = Some(value.to_owned());
+            }
             continue;
         }
         if let Some(value) = argument.strip_prefix("--cache-bytes=") {
@@ -71,10 +79,23 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
             "--mode" => {
                 mode = Some(arguments.next().ok_or("--mode requires exact or ann")?);
             }
-            "--output" | "--format" | "--protocol" | "--result-format" => {
-                output_format = arguments
+            "--output" | "--format" | "--result-format" => {
+                output_format = Some(
+                    arguments
+                        .next()
+                        .ok_or("--output requires a format argument")?
+                        .to_owned(),
+                );
+            }
+            "--protocol" => {
+                let value = arguments
                     .next()
-                    .ok_or("--output requires a format argument")?;
+                    .ok_or("--protocol requires a format argument")?;
+                if value.eq_ignore_ascii_case("text") {
+                    output_format.get_or_insert_with(|| "tsv".to_owned());
+                } else {
+                    protocol = Some(value);
+                }
             }
             "--exact" => mode = Some("exact".to_owned()),
             "--ann" => mode = Some("ann".to_owned()),
@@ -92,7 +113,8 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
                 writeln!(
                     stdout,
                     "minivectordb [--data-dir PATH] [--ready TEXT] \
-                     [--mode exact|ann] [--output framed|tsv|mysql] \
+                     [--mode exact|ann] [--protocol jsonl|text] \
+                     [--output jsonl|framed|tsv|mysql] \
                      [--cache-bytes N]"
                 )?;
                 stdout.flush()?;
@@ -113,23 +135,45 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
             _ => return Err("query mode must be exact or ann".into()),
         });
     }
-    let output_format = match output_format.to_ascii_lowercase().as_str() {
+    if let Some(protocol) = protocol
+        && protocol.eq_ignore_ascii_case("text")
+        && output_format.is_none()
+    {
+        output_format = Some("tsv".to_owned());
+    }
+    let output_format = match output_format
+        .as_deref()
+        .unwrap_or("jsonl")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "json" | "jsonl" => OutputFormat::Jsonl,
         "framed" => OutputFormat::Framed,
         "tsv" | "mysql-batch" | "mysql_batch" => OutputFormat::Tsv,
         "mysql" => OutputFormat::Mysql,
-        _ => return Err("output format must be framed, tsv, or mysql".into()),
+        _ => return Err("output format must be jsonl, framed, tsv, or mysql".into()),
     };
 
     let reader = BufReader::new(std::io::stdin());
-    let writer = BufWriter::new(std::io::stdout().lock());
-    run(
-        &mut database,
-        reader,
-        writer,
-        &ProtocolConfig {
-            ready_marker,
-            output_format,
-        },
-    )?;
+    match output_format {
+        OutputFormat::Jsonl => {
+            run_jsonl(
+                &mut database,
+                reader,
+                BufWriter::new(std::io::stdout().lock()),
+            )?;
+        }
+        output_format => {
+            run(
+                &mut database,
+                reader,
+                BufWriter::new(std::io::stdout().lock()),
+                &ProtocolConfig {
+                    ready_marker,
+                    output_format,
+                },
+            )?;
+        }
+    }
     Ok(())
 }
